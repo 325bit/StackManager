@@ -11,7 +11,7 @@
 		/// <summary>Who made the mod</summary>
 		public const string Author                          = "The Illusion";
 		/// <summary>Current version (Using Major.Minor.Build) </summary>
-		public const string Version                         = "1.0.6";
+		public const string Version                         = "1.1.0";
 		/// <summary>Name used on GUI's, like ModSettings</summary>
 		public const string GUIName                         = "Stack Manager";
 		/// <summary>The minimum Melon Loader version that your mod requires</summary>

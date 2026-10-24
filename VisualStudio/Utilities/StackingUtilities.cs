@@ -1,49 +1,7 @@
-﻿namespace StackManager
+namespace StackManager
 {
 	public class StackingUtilities
 	{
-		#region Console Stuff
-		[Obsolete("Use StackingUtilities.SetPostFix(GearItem, GearItem, float, float, bool) instead")]
-		internal static void ResetPostfixParams() { }
-
-		[Obsolete]
-		public static bool SetPostFix(GearItem? PostfixStack, GearItem? PostfixGearToAdd, float PostfixCondition, float PostfixConstraint, bool reset)
-		{
-			Main.PostfixTrack.PostFixTrack = !reset;
-
-			if (!string.IsNullOrWhiteSpace(Main.PostfixTrack.PostfixGearToAdd?.name) && !string.IsNullOrWhiteSpace(Main.PostfixTrack.PostfixStack?.name))
-			{
-				Main.Logger.Log($"SetPostFix({Main.PostfixTrack.PostFixTrack}, {Main.PostfixTrack.PostfixGearToAdd.name}, {Main.PostfixTrack.PostfixCondition}, {Main.PostfixTrack.PostfixStack.name}, {Main.PostfixTrack.PostfixConstraint})", FlaggedLoggingLevel.Debug);
-			}
-			else if (!string.IsNullOrWhiteSpace(Main.PostfixTrack.PostfixGearToAdd?.name))
-			{
-				Main.Logger.Log($"SetPostFix({Main.PostfixTrack.PostFixTrack}, {Main.PostfixTrack.PostfixGearToAdd.name}, {Main.PostfixTrack.PostfixCondition}, null, {Main.PostfixTrack.PostfixConstraint})", FlaggedLoggingLevel.Debug);
-			}
-			else if (!string.IsNullOrWhiteSpace(Main.PostfixTrack.PostfixStack?.name))
-			{
-				Main.Logger.Log($"SetPostFix({Main.PostfixTrack.PostFixTrack}, null, {Main.PostfixTrack.PostfixCondition}, {Main.PostfixTrack.PostfixStack.name}, {Main.PostfixTrack.PostfixConstraint})", FlaggedLoggingLevel.Debug);
-			}
-
-			switch (reset)
-			{
-				case true:
-					Main.PostfixTrack.PostfixStack			= null;
-					Main.PostfixTrack.PostfixGearToAdd		= null;
-					Main.PostfixTrack.PostfixCondition		= 0;
-					Main.PostfixTrack.PostfixConstraint		= 0;
-					break;
-				default:
-					Main.PostfixTrack.PostfixStack			= PostfixStack;
-					Main.PostfixTrack.PostfixGearToAdd		= PostfixGearToAdd;
-					Main.PostfixTrack.PostfixCondition		= PostfixCondition;
-					Main.PostfixTrack.PostfixConstraint		= PostfixConstraint;
-					break;
-			}
-
-			return true;
-		}
-		#endregion
-
 		[Obsolete("Use StackingUtilities.SetNormalizedCondition instead")]
 		public static float MaybeSetCondition(GearItem gi)
 		{
@@ -56,31 +14,45 @@
 			return Math.Max(gi.GetNormalizedCondition(), target.GetNormalizedCondition()); 
 		}
 
-		public static void MergeIntoStack(GearItem targetStack, GearItem gearToAdd, int units)
+		/// <summary>
+		/// Adds <paramref name="units"/> to <paramref name="targetStack"/> and gives the stack a single shared condition
+		/// </summary>
+		/// <param name="useMaxCondition">When set, the merged stack is pinned to 100% instead of the highest condition of the two</param>
+		public static void MergeIntoStack(GearItem targetStack, GearItem gearToAdd, int units, bool useMaxCondition = false)
 		{
 			if (gearToAdd == null) return;
 			if (targetStack == null) return;
-			
-			float TargetCondition = SetNormalizedCondition(gearToAdd, targetStack);
+			if (targetStack.m_StackableItem == null) return;
+			if (targetStack.m_GearItemData == null) return;
 
-			Main.Logger.Log($"TargetCondition:{TargetCondition}", FlaggedLoggingLevel.Debug);
+			string name = CommonUtilities.NormalizeName(gearToAdd.name) ?? string.Empty;
 
-			//if (Main.PostfixTrack.PostFixTrack == true)
-			//{
-			//	SetPostFix(null, null, 0, 0, true);
-			//}
+			// Items in the Advanced list always keep a full condition stack, so the whole stack never splits on durability.
+			// This has to feed the same value the clamp below uses, otherwise the assignment would be discarded.
+			float targetCondition = (useMaxCondition || Main.Config.Advanced.Contains(name))
+				? 1f
+				: SetNormalizedCondition(gearToAdd, targetStack);
 
-			if (Main.Config.Advanced.Contains(gearToAdd.name))
+			DebugLog.Write($"TargetCondition:{targetCondition}");
+
+			float maxHP = targetStack.m_GearItemData.MaxHP;
+			if (maxHP > 0f)
 			{
-				
-				targetStack.CurrentHP = targetStack.m_GearItemData.MaxHP;
+				targetStack.CurrentHP = Mathf.Clamp(targetCondition * maxHP, 0f, maxHP);
 			}
 
-			targetStack.CurrentHP = Mathf.Clamp(TargetCondition * targetStack.m_GearItemData.MaxHP, 0, targetStack.m_GearItemData.MaxHP);
+			// Align the stored content with the count before it moves, so the step below scales from a known state
+			StackContentSync.EnsureSynced(targetStack, "before merge");
+
 			targetStack.m_StackableItem.m_Units += units;
+
+			// Flour and cooking oil keep the content of the whole stack in a single field, so that amount has to grow
+			// with the count or every recipe keeps seeing what a single unit holds
+			StackContentSync.EnsureSynced(targetStack, "merge");
+
 			if (targetStack.m_StackableItem.m_ShareStackWithGear == null)
 			{
-				targetStack.m_StackableItem.m_ShareStackWithGear = new(0);
+				targetStack.m_StackableItem.m_ShareStackWithGear = Array.Empty<StackableItem>();
 			}
 		}
 
@@ -89,9 +61,21 @@
 			return target != null && item != null;
 		}
 
+		/// <summary>
+		/// Returns <c>true</c> if the vanilla stacking should be used for this item
+		/// </summary>
+		/// <remarks>
+		/// Instance names carry a "(Clone)" or " (1)" suffix, so they must be normalized before being compared against the config.
+		/// Comparing the raw name never matches and silently disables everything downstream of this check.
+		/// </remarks>
 		public static bool UseDefaultStacking(GearItem gearItem)
 		{
-			return gearItem == null || !(Main.Config.STACK_MERGE.Contains(gearItem.name));
+			if (gearItem == null) return true;
+
+			string name = CommonUtilities.NormalizeName(gearItem.name) ?? string.Empty;
+			if (string.IsNullOrWhiteSpace(name)) return true;
+
+			return !Main.Config.STACK_MERGE.Contains(name);
 		}
 
 		public static bool CanOperate(GearItem? gi, float condition)
@@ -109,29 +93,20 @@
 
 			if (targetStack == null)
 			{
-				Main.Logger.Log($"targetStack:null", FlaggedLoggingLevel.Debug);
+				DebugLog.Write($"Custom merge skipped: no matching stack for {gearToAdd.name}, vanilla stacking continues");
 				return true;
 			}
 
 			if (!CanBeMerged(targetStack, gearToAdd))
 			{
-				Main.Logger.Log("GearItem cant be stacked", FlaggedLoggingLevel.Debug);
-
-				if (!string.IsNullOrWhiteSpace(gearToAdd.name))
-				{
-					if (!string.IsNullOrWhiteSpace(targetStack.name)) Main.Logger.Log($"CanBeMerged({targetStack.name}, {gearToAdd.name})", FlaggedLoggingLevel.Debug);
-					else Main.Logger.Log($"CanBeMerged(null, {gearToAdd.name})", FlaggedLoggingLevel.Debug);
-				}
-				else Main.Logger.Log("gearToAdd.name:null", FlaggedLoggingLevel.Debug);
-
+				DebugLog.Write($"Custom merge skipped: {gearToAdd.name} cannot merge into {targetStack.name}, "
+					+ $"vanilla stacking continues");
 				return true;
 			}
 
 			if (targetStack.m_StackableItem != null)
 			{
-				if (Settings.Instance.UseMaxHP) normalizedCondition = targetStack.m_GearItemData.MaxHP;
-
-				MergeIntoStack(targetStack, gearToAdd, numUnits);
+				MergeIntoStack(targetStack, gearToAdd, numUnits, Settings.Instance.UseMaxHP);
 
 				//LogEverthing(gearToAdd, targetStack, normalizedCondition, numUnits);
 				return true;
@@ -141,77 +116,51 @@
 		}
 
 		/// <summary>
-		/// 
+		/// Handles the <see cref="PlayerManager.TryAddToExistingStackable(GearItem, float, int, out GearItem)"/> patch
 		/// </summary>
-		/// <param name="gearToAdd"></param>
-		/// <param name="normalizedCondition"></param>
-		/// <param name="numUnits"></param>
-		/// <param name="existingGearItem"></param>
-		/// <returns></returns>
+		/// <returns><c>true</c> when the vanilla method should still run, <c>false</c> when this call handled it</returns>
+		/// <remarks>
+		/// <paramref name="existingGearItem"/> maps to an <c>out</c> parameter of the patched method, so it has to be assigned
+		/// on every path. Skipping an out parameter would hand the caller whatever happened to be on the stack.
+		/// </remarks>
 		public static bool Do(GearItem gearToAdd, float normalizedCondition, int numUnits, ref GearItem? existingGearItem)
 		{
+			// Assign first, so every early return below still leaves the caller with a well defined value
+			existingGearItem = null;
+
 			if (gearToAdd == null) return true;
 			if (!CanOperate(gearToAdd, normalizedCondition)) return true;
 
-			if (GameManager.GetInventoryComponent().TryStackingItem(gearToAdd))
+			Inventory inventory = GameManager.GetInventoryComponent();
+			if (inventory == null)
 			{
-				Main.Logger.Log($"Was able to stack item {gearToAdd.DisplayName}", FlaggedLoggingLevel.Debug);
-				return false;
-			}
-
-			Main.Logger.Log($"Was not able to stack item {gearToAdd.DisplayName}", FlaggedLoggingLevel.Debug);
-
-			/*
-			//GearItem? targetStack = null;
-			GearItem? targetStack = StackableItem.GetClosestMatchStackable(GameManager.GetInventoryComponent().m_Items, gearToAdd, normalizedCondition);
-
-			if (targetStack == null)
-			{
-				Main.Logger.Log($"{gearToAdd.name}::targetStack:null", FlaggedLoggingLevel.Debug);
-				existingGearItem = null;
-
-				targetStack = StackableItem.insta
-			}
-
-			if (!CanBeMerged(targetStack, gearToAdd))
-			{
-				Main.Logger.Log("GearItem cant be stacked", FlaggedLoggingLevel.Debug);
-
-				if (!string.IsNullOrWhiteSpace(gearToAdd.name))
-				{
-					if (!string.IsNullOrWhiteSpace(targetStack.name)) Main.Logger.Log($"CanBeMerged({targetStack.name}, {gearToAdd.name})", FlaggedLoggingLevel.Debug);
-					else Main.Logger.Log($"CanBeMerged(null, {gearToAdd.name})", FlaggedLoggingLevel.Debug);
-				}
-				else Main.Logger.Log("gearToAdd.name:null", FlaggedLoggingLevel.Debug);
-
-				existingGearItem = null;
+				DebugLog.Write("Custom merge skipped: inventory component is not available, vanilla stacking continues");
 				return true;
 			}
 
-			// A lit match should never be stackable
-			if (gearToAdd.IsLitMatch())
+			// A lit match must never be merged into a stack of unlit ones
+			if (gearToAdd.IsLitMatch()) return true;
+
+			// Read anything needed for logging up front: stacking consumes the gear item,
+			// so touching it after TryStackingItem can hit a destroyed object
+			string displayName = gearToAdd.DisplayName;
+			string name = CommonUtilities.NormalizeName(gearToAdd.name) ?? string.Empty;
+
+			GearItem? candidate = StackableItem.GetClosestMatchStackable(inventory.m_Items, gearToAdd, normalizedCondition);
+
+			if (!inventory.TryStackingItem(gearToAdd))
 			{
-				existingGearItem = null;
-				return false;
-			}
-			if (targetStack.IsLitMatch())
-			{
-				existingGearItem = null;
-				return false;
+				// Not an error: the vanilla method right after this prefix still runs and does the real merge
+				DebugLog.Write($"Custom merge skipped for {displayName}, vanilla stacking continues");
+				return true;
 			}
 
-			if (targetStack.m_StackableItem != null)
-			{
-				if (Settings.Instance.UseMaxHP) normalizedCondition = targetStack.m_GearItemData.MaxHP;
+			existingGearItem = candidate;
 
-				MergeIntoStack(targetStack, gearToAdd, numUnits);
-				existingGearItem = targetStack;
+			DebugLog.Write($"Custom merge took x{numUnits} {displayName} ({name}) into "
+				+ $"{(candidate == null ? "null" : candidate.name)}");
 
-				//LogEverthing(gearToAdd, targetStack, normalizedCondition, numUnits);
-				return false;
-			}
-			*/
-			return true;
+			return false;
 		}
 
 		public static void LogEverthing(GearItem? gearToAdd, GearItem? targetStack, float normalizedCondition, int units)
@@ -248,8 +197,8 @@
 				difference = Math.Abs(gearToAdd.CurrentHP - targetStack.CurrentHP);
 				gearToAddUID = CommonUtilities.GetGearItemPDID(gearToAdd);
 				targetStackUID = CommonUtilities.GetGearItemPDID(targetStack);
-				gearToAddName = string.IsNullOrWhiteSpace(gearToAdd.name) ? gearToAdd.name : "NULL";
-				targetStackName = string.IsNullOrWhiteSpace(targetStack.name) ? targetStack.name : "NULL";
+				gearToAddName = string.IsNullOrWhiteSpace(gearToAdd.name) ? "NULL" : gearToAdd.name;
+				targetStackName = string.IsNullOrWhiteSpace(targetStack.name) ? "NULL" : targetStack.name;
 			}
 
 			sb.AppendLine("Gear to add: ");

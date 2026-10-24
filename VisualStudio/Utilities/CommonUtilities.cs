@@ -37,10 +37,14 @@ namespace StackManager.Utilities
 		{
 			if (PlayerManagerComponent == null) return false;
 
-			bool first      = PlayerManagerComponent.m_ControlMode == PlayerControlMode.Dead;
-			bool second     = PlayerManagerComponent.m_ControlMode == PlayerControlMode.InConversation;
-			bool third      = PlayerManagerComponent.m_ControlMode == PlayerControlMode.Locked;
-			bool fourth     = PlayerManagerComponent.m_ControlMode == PlayerControlMode.InFPCinematic;
+			// The four modes are mutually exclusive, so this has to be a set of negations.
+			// Chaining them with && could never be true.
+			PlayerControlMode mode = PlayerManagerComponent.m_ControlMode;
+
+			bool first      = mode != PlayerControlMode.Dead;
+			bool second     = mode != PlayerControlMode.InConversation;
+			bool third      = mode != PlayerControlMode.Locked;
+			bool fourth     = mode != PlayerControlMode.InFPCinematic;
 
 			return first && second && third && fourth;
 		}
