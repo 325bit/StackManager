@@ -76,7 +76,13 @@ namespace StackManager.Utilities
 		}
 
 		private static readonly Dictionary<string, Baseline> s_Baselines = new();
+		/// <summary>Reused by the food branch of <see cref="TryGetBaseline"/>, whose result is read and dropped at once</summary>
+		private static readonly Baseline s_FoodBaseline = new();
 		private static readonly Dictionary<int, Track> s_Tracks = new();
+
+		/// <summary>Ceiling on tracked stacks; the table is emptied when it is passed, see <see cref="PruneTracks"/></summary>
+		private const int TrackLimit = 4096;
+
 		private static readonly HashSet<string> s_Reported = new();
 
 		/// <summary>
@@ -401,7 +407,13 @@ namespace StackManager.Utilities
 			track.PendingSince = 0f;
 		}
 
-		/// <summary>Syncs every stack a container holds, used after the game merged something into it</summary>
+		/// <summary>Syncs the stacks a container merge has just changed, used after the game merged something into it</summary>
+		/// <remarks>
+		/// Only the stack that received the units needs looking at. Every other stack in the container was already in
+		/// step when it got there, and asking the store-all button to move thirty items used to run the full repair
+		/// over the whole container thirty times. The check that keeps this narrow is two reads and a lookup, so it
+		/// costs about as much as walking the list.
+		/// </remarks>
 		public static void SyncContainer(Container? container)
 		{
 			if (s_Loading) return;
@@ -417,8 +429,33 @@ namespace StackManager.Utilities
 				GearItemObject? entry = items[i];
 				if (entry == null) continue;
 
-				Reconcile(entry.m_GearItem, "container merge", true);
+				GearItem? gi = entry.m_GearItem;
+				if (gi == null) continue;
+
+				if (!NeedsContainerSync(gi)) continue;
+
+				Reconcile(gi, "container merge", true);
 			}
+		}
+
+		/// <summary>
+		/// True when this item is one of ours whose unit count no longer matches what was last repaired.
+		/// </summary>
+		/// <remarks>
+		/// An untracked stack of ours counts as changed: it was never repaired under a track, so the merge that put it
+		/// there may be the first thing that gave it a unit count above one. Anything the game or another mod made
+		/// stackable has no content of ours to keep in step and is skipped.
+		/// </remarks>
+		private static bool NeedsContainerSync(GearItem gi)
+		{
+			StackableItem? stack = gi.m_StackableItem;
+			if (stack == null) return false;
+			if (!AddedStackables.Contains(stack)) return false;
+
+			if (!s_Tracks.TryGetValue(stack.GetInstanceID(), out Track? track)) return true;
+			if (track.Gear != gi) return true;
+
+			return track.Units != stack.m_Units;
 		}
 
 		/// <summary>Syncs every stack in the player's inventory</summary>
@@ -982,26 +1019,26 @@ namespace StackManager.Utilities
 		{
 			baseline = null;
 
-			string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
-
 			if (kind == ContentKind.Food)
 			{
 				FoodItem? food = gi.m_FoodItem;
 				if (food == null || food.m_CaloriesTotal <= 0f) return false;
 
-				baseline = new Baseline
-				{
-					Kind = kind,
-					UnitContent = food.m_CaloriesTotal,
-					UnitWeightKg = UnitWeightOf(gi, kind),
-					UnitLimit = 0f
-				};
+				// A food baseline is only ever read straight away, so the same instance is filled in again instead of
+				// building one per call: the sweep asks this for every food item twice a second.
+				s_FoodBaseline.Kind = kind;
+				s_FoodBaseline.UnitContent = food.m_CaloriesTotal;
+				s_FoodBaseline.UnitWeightKg = UnitWeightOf(gi, kind);
+				s_FoodBaseline.UnitLimit = 0f;
 
-				// Kept up to date for the paths that only look the number up, but never read back from here
-				if (!string.IsNullOrWhiteSpace(name)) s_Baselines[name] = baseline;
+				baseline = s_FoodBaseline;
+
+				RegisterFoodName(gi, food, kind);
 
 				return true;
 			}
+
+			string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
 
 			if (!string.IsNullOrWhiteSpace(name) && s_Baselines.TryGetValue(name, out Baseline? known))
 			{
@@ -1010,6 +1047,29 @@ namespace StackManager.Utilities
 			}
 
 			return false;
+		}
+
+		/// <summary>
+		/// Makes a food prefab known by name, so <see cref="KnowsPrefab"/> answers for it once the item has been seen.
+		/// </summary>
+		/// <remarks>
+		/// The entry is a marker, not a measurement: food is always compared against the calorie total the item reports
+		/// at that moment, never against a recorded number. Written once per prefab, which is what keeps the sweep from
+		/// allocating a baseline per food item per tick.
+		/// </remarks>
+		private static void RegisterFoodName(GearItem gi, FoodItem food, ContentKind kind)
+		{
+			string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
+			if (string.IsNullOrWhiteSpace(name)) return;
+			if (s_Baselines.ContainsKey(name)) return;
+
+			s_Baselines[name] = new Baseline
+			{
+				Kind = kind,
+				UnitContent = food.m_CaloriesTotal,
+				UnitWeightKg = s_FoodBaseline.UnitWeightKg,
+				UnitLimit = 0f
+			};
 		}
 
 		private static Baseline? EnsureBaseline(GearItem gi, StackableItem stack, ContentKind kind, float content)
@@ -1109,8 +1169,22 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>Drops trackers whose gear item no longer exists, so the table does not grow all session</summary>
+		/// <remarks>
+		/// The sweep relies on a destroyed Unity object comparing equal to null, which does not have to hold through
+		/// interop. The ceiling makes the table bounded either way: emptying it only costs one repair pass, because a
+		/// stack without a track is simply registered again the next time it is looked at.
+		/// </remarks>
 		private static void PruneTracks()
 		{
+			if (s_Tracks.Count > TrackLimit)
+			{
+				ReportOnce("track table", $"Stack tracking table reached {s_Tracks.Count} entries, starting over");
+
+				s_Tracks.Clear();
+
+				return;
+			}
+
 			if (s_Tracks.Count < 256) return;
 
 			List<int>? dead = null;

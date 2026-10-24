@@ -27,6 +27,10 @@ namespace StackManager.Patches
 
 		private static void Dump(CraftingOperation operation, string phase)
 		{
+			// This runs before and after every craft, over every required ingredient and every item in the inventory.
+			// It is a diagnostic only, so with Debug Logging off it must not even read the blueprint
+			if (!DebugLog.Enabled) return;
+
 			try
 			{
 				BlueprintData? blueprint = operation?.Blueprint;

@@ -85,11 +85,22 @@ namespace StackManager
 
 		public static bool Do(GearItem gearToAdd, float normalizedCondition, int numUnits)
 		{
-			//GearItem? targetStack = null;
-			GearItem? targetStack = StackableItem.GetClosestMatchStackable(GameManager.GetInventoryComponent().m_Items, gearToAdd, normalizedCondition);
+			if (gearToAdd == null) return true;
+
+			// Checked before anything is looked up: the candidate scan below walks the whole inventory, and this
+			// method is entered for every item the game stacks, most of which this mod does not handle at all
+			if (!CanOperate(gearToAdd, normalizedCondition)) return true;
+
+			Inventory? inventory = GameManager.GetInventoryComponent();
+			if (inventory == null)
+			{
+				DebugLog.Write("Custom merge skipped: inventory component is not available, vanilla stacking continues");
+				return true;
+			}
+
+			GearItem? targetStack = StackableItem.GetClosestMatchStackable(inventory.m_Items, gearToAdd, normalizedCondition);
 
 			//if (ComplexLogger.Main.CurrentLevel.HasFlag(FlaggedLoggingLevel.Debug)) LogEverthing(gearToAdd, targetStack, normalizedCondition, numUnits);
-			if (!CanOperate(gearToAdd, normalizedCondition)) return true;
 
 			if (targetStack == null)
 			{

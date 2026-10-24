@@ -399,3 +399,4 @@ FodyWeavers.xsd
 
 # Build output from local builds (TheLongDarkPath)
 /VisualStudio/out/
+docs/PERFORMANCE.md
