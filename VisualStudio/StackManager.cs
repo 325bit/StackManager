@@ -17,9 +17,10 @@ namespace StackManager
 		public static string ConfigFile { get; } = Path.Combine(ConfigDirectory, "config.json");
 		/// <summary>
 		/// Schema version of config.json, not the mod version: a saved file carrying any other value is backed up and
-		/// rebuilt from <see cref="SetupDefaultConfig"/>, so this only moves when the shape of the file changes.
+		/// brought up to date from <see cref="BuildDefaultConfig"/>, so this moves whenever the file gains entries an
+		/// existing install has to be given - a new list, or a default item that was not in the old list.
 		/// </summary>
-		public static Version CurrentVersion { get; } = new(1, 0, 5);
+		public static Version CurrentVersion { get; } = new(1, 0, 6);
 		#endregion
 		#region MelonMod Methods
 		public override void OnInitializeMelon()
@@ -172,25 +173,80 @@ namespace StackManager
 
 		public static bool UpdateConfig()
 		{
-			Logger.Log($"Config version {Config.ConfigurationVersion} does not match {CurrentVersion}, regenerating", FlaggedLoggingLevel.Always);
+			Logger.Log($"Config version {Config.ConfigurationVersion} does not match {CurrentVersion}, updating", FlaggedLoggingLevel.Always);
 
 			BackupConfig($"v{Config.ConfigurationVersion}");
-			SetupDefaultConfig();
+
+			Config defaults = BuildDefaultConfig();
+
+			// A hand edited file can lose a list entirely, and every reader below assumes the lists exist
+			Config.STACK_MERGE ??= new();
+			Config.Advanced ??= new();
+			Config.AddStackableComponent ??= new();
+			Config.MaxWeightStackItems ??= new();
+
+			// Merged rather than replaced. An update only ever introduces new entries, and a player who took a name
+			// out of a list on purpose must not find it back afterwards, so nothing already in the file is touched.
+			int added = MergeMissing(Config.STACK_MERGE, defaults.STACK_MERGE)
+				+ MergeMissing(Config.Advanced, defaults.Advanced)
+				+ MergeMissing(Config.AddStackableComponent, defaults.AddStackableComponent)
+				+ MergeMissing(Config.MaxWeightStackItems, defaults.MaxWeightStackItems);
+
+			Config.ConfigurationVersion = CurrentVersion;
+
 			JsonFile.Save<Config>(ConfigFile, Config);
 
+			Logger.Log($"Config updated to v{CurrentVersion}: {added} new entries added, everything else kept", FlaggedLoggingLevel.Always);
+
 			return true;
+		}
+
+		/// <summary>
+		/// Appends every default entry the target list does not carry yet.
+		/// </summary>
+		/// <remarks>
+		/// Case is ignored, so a name a player typed by hand in a different case still counts as present and is not
+		/// added a second time.
+		/// </remarks>
+		private static int MergeMissing(List<string>? target, List<string>? defaults)
+		{
+			if (target == null || defaults == null) return 0;
+
+			int added = 0;
+
+			foreach (string name in defaults)
+			{
+				if (string.IsNullOrWhiteSpace(name)) continue;
+				if (target.Exists(existing => string.Equals(existing, name, StringComparison.OrdinalIgnoreCase))) continue;
+
+				target.Add(name);
+				added++;
+
+				DebugLog.Write($"Config: added {name}");
+			}
+
+			return added;
 		}
 
 		public static bool SetupDefaultConfig()
 		{
 			DebugLog.Write("Making default config");
-			Config = new();
-			Config.ConfigurationVersion = CurrentVersion;
+			Config = BuildDefaultConfig();
+			return true;
+		}
 
-			Config.STACK_MERGE = new()
+		/// <summary>
+		/// The config a fresh install starts with, and the source of every entry an update adds.
+		/// </summary>
+		private static Config BuildDefaultConfig()
+		{
+			Config config = new() { ConfigurationVersion = CurrentVersion };
+
+			config.STACK_MERGE = new()
 			{
 				"GEAR_BirchSaplingDried",
 				"GEAR_BearHideDried",
+				"GEAR_BeeHive",
 				"GEAR_BottleAntibiotics",
 				"GEAR_BottlePainKillers",
 				"GEAR_Carrot",
@@ -208,11 +264,13 @@ namespace StackManager
 				"GEAR_RabbitPeltDried",
 				//"GEAR_RecycledCan",
 				"GEAR_StumpRemover",
+				"GEAR_TapeRoll",
 				"GEAR_WolfPeltDried",
-				"GEAR_WoodMatches"
+				"GEAR_WoodMatches",
+				"GEAR_Yeast"
 			};
 
-			Config.Advanced = new()
+			config.Advanced = new()
 			{
 				"GEAR_CoffeeTin",
 				"GEAR_GreenTeaPackage",
@@ -220,31 +278,35 @@ namespace StackManager
 				"GEAR_Potato"
 			};
 
-			Config.AddStackableComponent = new()
+			config.AddStackableComponent = new()
 			{
+				"GEAR_BeeHive",
 				"GEAR_GreyWolfPelt",
 				"GEAR_HerbLeavesDried",
 				"GEAR_Potato",
 				//"GEAR_RecycledCan",
-				"GEAR_StumpRemover"
+				"GEAR_StumpRemover",
+				"GEAR_TapeRoll",
+				"GEAR_Yeast"
 			};
 
-			// Cooking ingredients. They are sorted under food in the inventory but cannot be eaten, so the calorie
-			// based partial check does not apply to them; the whole unit is used up by a recipe.
-			// Powders (flour, salt, sugar, oats) and liquid containers (cooking oil) both belong in this list: what a
-			// stack of them holds is kept in step with its unit count, so the crafting panel and the recipes see the
-			// total of the stack rather than the contents of a single container.
-			Config.MaxWeightStackItems = new()
+			// Whole units only. Cooking ingredients are sorted under food in the inventory but cannot be eaten, so
+			// the calorie based partial check does not apply to them; the whole unit is used up by a recipe.
+			// Powders (flour, salt, sugar, oats, gunpowder) and liquid containers (cooking oil) both belong in this
+			// list: what a stack of them holds is kept in step with its unit count, so the crafting panel and the
+			// recipes see the total of the stack rather than the contents of a single container.
+			config.MaxWeightStackItems = new()
 			{
 				"GEAR_CookingOil",
 				"GEAR_Flour",
+				"GEAR_GunpowderCan",
 				"GEAR_OatsTin",
 				"GEAR_Salt",
 				"GEAR_SaltBag",
 				"GEAR_SugarA"
 			};
 
-			return true;
+			return config;
 		}
 	}
 }

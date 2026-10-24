@@ -13,7 +13,7 @@ namespace StackManager
 		public bool UseMaxHP = false;
 
 		[Name("Max Weight Food Stackable")]
-		[Description("Yes: food and cooking ingredients only stack with other full weight units, so a 0.5kg piece of a 1kg pie never joins a stack. No: the mod stops adding stacking to food, and existing stacks stay as they are")]
+		[Description("Yes: food, cooking ingredients and the gunpowder can only stack with other full units, so a 0.5kg piece of a 1kg pie never joins a stack. No: the mod stops adding stacking to them, and existing stacks stay as they are")]
 		[Choice("No", "Yes")]
 		public int MaxWeightFoodStackable = 1;
 

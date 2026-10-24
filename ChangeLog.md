@@ -1,3 +1,20 @@
+# Stack Manager v1.1.1
+
+## Added
+
+- **Beehives, yeast and tape rolls stack**, following the normal rule: any two of them merge and the stack keeps the
+  better condition.
+- **The gunpowder can stacks under the whole-portion rule.** Full cans merge, and a can a recipe has taken powder out
+  of stays on its own. A recipe also draws from the can holding the least gunpowder first.
+
+## Changed
+
+- **Updates no longer replace `config.json`.** New entries are appended to the lists already in the file and nothing
+  else is touched, so an item removed on purpose stays removed. The previous file is still kept as
+  `config.v<version>.<timestamp>.json`.
+
+---
+
 # Stack Manager v1.1.0
 
 ## Added

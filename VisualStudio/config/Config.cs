@@ -13,9 +13,10 @@ namespace StackManager.config
 		[JsonInclude]
 		public List<string> AddStackableComponent { get; set; } = new();
 		/// <summary>
-		/// Cooking ingredients that belong to the food category but cannot be eaten. They get the same full weight
-		/// stacking rule as food, see <see cref="Utilities.FoodStackingRules"/>.
-		/// Powders and liquid containers are both listed here: a stack of them holds the content of every unit in it,
+		/// Items that stack only as whole units, the same rule food follows. Cooking ingredients that belong to the
+		/// food category but cannot be eaten are listed here, see <see cref="Utilities.FoodStackingRules"/>, and so
+		/// is the gunpowder can, which a recipe takes part of.
+		/// Powders and liquid containers are both allowed: a stack of them holds the content of every unit in it,
 		/// which is kept in step with the unit count rather than being fixed to one container.
 		/// </summary>
 		[JsonInclude]

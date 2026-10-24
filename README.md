@@ -11,9 +11,10 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 
 - Food stacks. Full portions of the same food merge into a single inventory entry.
 - Partly eaten food never joins a stack. A 0.5 kg piece of a 1 kg pie stays on its own, next to a stack of whole 1 kg pies.
-- Cooking ingredients stack: flour, salt, salt bag, sugar, oats tin, cooking oil.
+- Cooking ingredients stack: flour, salt, salt bag, sugar, oats tin, cooking oil, gunpowder can.
 - Dried pelts, hides, guts, leather, saplings and herbs stack.
 - Carrots, potatoes, stump remover, matches, painkiller and antibiotic bottles, coffee tins and green tea packages stack.
+- Beehives, yeast and tape rolls stack.
 - Food only merges with food of the same freshness, and the better of the two is kept.
 - Merging keeps the highest condition. Coffee tins, green tea packages and potatoes are held at 100% condition,
   carrots at 50%.
@@ -50,7 +51,7 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 |---|---|---|
 | Add Stackable Behaviour | On | Stacking for the items listed in `config.json`. Takes full effect after a restart |
 | Set to max condition | Off | Merged stacks are pinned to 100% condition instead of the higher of the two items |
-| Max Weight Food Stackable | Yes | Only whole portions of food and ingredients stack. **No** turns food stacking off |
+| Max Weight Food Stackable | Yes | Only whole portions of food, ingredients and gunpowder stack. **No** turns that stacking off |
 | Debug Logging | No | Writes every merge, split and correction to `MelonLoader/Latest.log` |
 
 ## Configuration
@@ -62,10 +63,11 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 | `STACK_MERGE` | Items that stack and keep the best condition |
 | `Advanced` | Items whose stacks are always held at 100% condition |
 | `AddStackableComponent` | Items that receive stacking from scratch |
-| `MaxWeightStackItems` | Cooking ingredients that follow the whole-portion food rule |
+| `MaxWeightStackItems` | Food, cooking ingredients and the gunpowder can — whole portions only |
 
-The file is rewritten (with a timestamped backup next to it) when it no longer matches the installed version.
+An update only adds entries to these lists. What is already in the file stays as written, and a timestamped copy is
+kept next to it, so a name removed on purpose does not come back.
 
 ## Version
 
-1.1.0 — see [ChangeLog.md](ChangeLog.md).
+1.1.1 — see [ChangeLog.md](ChangeLog.md).
