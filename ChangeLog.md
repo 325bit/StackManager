@@ -1,3 +1,32 @@
+# Stack Manager v1.2.1
+
+## Fixed
+
+- **Moving cooking oil between a container and the backpack left the two sides disagreeing.** Taking a unit out of a
+  container stack lowered the count but left the volume of the whole stack behind, so the container kept reporting the
+  weight of the bottle that had just left, and moving a whole stack to the bag handed the copy the volume of a single
+  bottle instead of the stack. Both directions are now corrected at the moment of the transfer, which also covers the
+  same move for flour and the gunpowder can.
+- The repair threshold was measured against the total of a stack, so a stack of a hundred bags could lose a whole bag
+  and sit inside the one percent it allowed. It is now measured against a single unit.
+
+---
+
+# Stack Manager v1.2.0
+
+## Added
+
+- **`Mods/StackManager_AddItems.txt`**, a plain text list for items this mod does not stack yet. It is created on the
+  first start: a name under `#非液体` gets ordinary stacking, a name under `#液体/重量可变` gets whole-portion
+  stacking for liquids and for anything whose weight per unit can change. Entries apply from the next start, and the
+  file is only ever read, so deleting a line takes the item out again.
+- The two headers are also accepted as `#non-liquid` and `#liquid`, and a name may keep the quotes and trailing comma
+  it had when it was copied out of `config.json`.
+- A name that ends up under no header, or that is spelled in a different case from an entry already in the list, is
+  reported in `MelonLoader/Latest.log` instead of disappearing silently.
+
+---
+
 # Stack Manager v1.1.1
 
 ## Added

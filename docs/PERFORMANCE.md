@@ -129,28 +129,33 @@ lines.Add($"#{instances} id={item.m_InstanceID} units={...} ...");
 
 ## 六、优化建议（按性价比）
 
-### P0 · 零行为风险，先做这两个
+> 状态：下表各项已按此顺序处理，P0 / P1 全部落地，P2 做了一半，实测见第八节。
 
-1. **Trace 补丁开头加 `if (!DebugLog.Enabled) return;`**
+### P0 · 零行为风险，先做这两个 ✅
+
+1. ✅ **Trace 补丁开头加 `if (!DebugLog.Enabled) return;`**
    做菜 3–8 ms/次 → ~0.2 ms/次，垃圾从 ~0.3 MB/次 → 0。
-2. **`StackingUtilities.Do(3 参)` 把 `CanOperate` 提到 `GetClosestMatchStackable` 之前**
+2. ✅ **`StackingUtilities.Do(3 参)` 把 `CanOperate` 提到 `GetClosestMatchStackable` 之前**
    与本 mod 无关的物品合堆时不再白扫背包。
 
-### P1 · 低风险，收益最大
+### P1 · 低风险，收益最大 ✅
 
-3. **`NormalizeName` 加名字缓存 + 单次扫描实现**
-   - 缓存：`Dictionary<string,string>`，key 是原始 `gi.name`（`GEAR_Flour (1)` 这种变体也缓存），命中 21 ns / 0 B；
-   - 未命中时用一次扫描替代两次正则（去掉 `(...)`、空白+数字、`(Clone)`、`\0`）。
-   预计：进图 15–40 ms → **5–10 ms**；`CanStackItems` 单次合并 1.5 ms → **0.15 ms**；巡检再降 80%。
-4. **`SyncContainer` 只同步"刚被合并进去的那一件"**，而不是整个容器。
-   现在的写法是 Postfix 里无条件重扫容器；容器越大、一次转移越多，浪费越多。若一时改不动，退一步：给容器维护一个"含本 mod 堆的数量"，为 0 时直接跳过。
+3. ✅ **`NormalizeName` 加名字缓存 + 快速路径**
+   - 名字里没有 `(`、`\0`、空白时直接返回原串（零分配、无正则），这覆盖了全部 prefab 名；
+   - 需要处理的名字（实例名）走原正则一次，结果进 `Dictionary` 缓存，上限 4096 条；
+   - **正则本身没有改**，所以"哪些物品被识别"这件事的判定完全不变。实测 496 → 29 ns，见 8.1。
+4. ✅ **`SyncContainer` 只对"单位数真的动了的那一件"做完整对账**
+   判据是 `s_Tracks` 里记录的上次单位数，两次读取 + 一次查表 ≈ 0.1 µs；
+   没变的一律跳过，未登记过的本 mod 堆仍会走完整对账（否则首次合堆会漏）。
 
 ### P2 · 可选
 
-5. `DebugLog` 改成惰性（`Write(Func<string>)`，或调用点写 `if (DebugLog.Enabled)`），省掉关闭状态下的 250 B/次。
-6. `TryGetBaseline` 的食物分支每次 new 一个 `Baseline`（巡检 2 Hz × 200 件食物），改成复用/结构体。
-7. `s_Tracks` 加硬上限。
-8. 巡检自适应：背包内容长时间无变化时从 2 Hz 降到 1 Hz（收益很小，优先级最低）。
+5. ⏭ `DebugLog` 改成惰性：**未做**。剩下的插值全部在冷路径（每次修复一行、每个 prefab 一次、拒绝合并一次），
+   关闭状态下的浪费已经随第 1、3 项消失，再改要动 40 多个调用点，不值。
+6. ✅ `TryGetBaseline` 的食物分支不再每次 `new Baseline`：改成一个复用的实例填充后返回；
+   每 prefab 仍会补一条"名字登记"（`KnowsPrefab` 依赖它），但只写一次。
+7. ✅ `s_Tracks` 加上限 4096，超了整体清空重建（清空的代价只是重新登记一次，不影响正确性）。
+8. ⏭ 巡检自适应降频：**未做**。收益 < 0.05% 帧预算，却要在"内容有没有变"上做判断，风险倒挂。
 
 ---
 
@@ -159,3 +164,51 @@ lines.Add($"#{instances} id={item.m_InstanceID} units={...} ...");
 本文的游戏内毫秒数是"托管实测 × 互操作系数"的估算，不是游戏内计时。要拿到真实数字，最省事的办法是加一段临时采样：在 `IdleCheck` 和 `ConsumeMaterials` 里用 `Stopwatch` 统计，每 60 次打一行 `Debug` 日志，跑一趟图 + 做几次菜就有实测值。需要的话我可以加上（默认关闭，不影响正常游玩）。
 
 复现基准：`cd D:\code\Csharp\PerfBench && dotnet run -c Release`。
+
+## 八、优化实施记录（v1.1.0）
+
+> 第三节的钩子开销表是**优化前**的数字，保留作为对照；本节记录改了什么、实测多少。
+
+### 8.1 微基准（`D:/code/Csharp/PerfBench`，.NET 8 托管侧）
+
+`NormalizeName`，语料 286 条（16 个真实 prefab 名 × 17 种实例后缀，含 `\0`、`(Clone) (3)`、`((1))` 等边角）：
+
+| 实现 | 每次耗时 | 每次分配 |
+|---|---|---|
+| 旧：2×`Regex.Replace` + 2×`Replace` + `Trim` | **496 ns** | 92 B |
+| 新：快速路径（名字干净，直接原样返回） | **29 ns** | **0 B** |
+| 新：需要处理的名字（首次走正则，之后命中缓存） | **24 ns** | **0 B** |
+
+等价性：对同一语料逐条比对旧正则返回值与新实现返回值，**286/286 完全一致**。
+新实现只加了一条前置判断和一层缓存，真正做清洗的仍然是原来那四步，所以"哪些物品被识别"的判定没有任何变化。
+
+### 8.2 五处改动
+
+| 文件 | 改动 | 直接效果 |
+|---|---|---|
+| `Patches/CraftingOperation_ConsumeMaterialsTrace.cs` | `Dump()` 开头 `if (!DebugLog.Enabled) return;` | 日志关闭时做菜不再遍历配方需求 × 背包 |
+| `Utilities/StackingUtilities.cs` | `Do(GearItem, float, int)`：`CanOperate` 提到候选扫描之前 | 与本 mod 无关的 90% 物品不再白扫背包；顺带补了 `inventory == null` 判断 |
+| `Utilities/CommonUtilities.cs` | `NormalizeName` 快速路径 + 上限 4096 的缓存 | 见 8.1，单次调用便宜 17 倍且零分配 |
+| `Utilities/StackContentSync.cs` | `SyncContainer` 只对单位数变化过的堆做完整对账（`NeedsContainerSync`） | 一次合并从"扫整个容器"变成"扫列表 + 修一件" |
+| `Utilities/StackContentSync.cs` | `TryGetBaseline` 食物分支复用实例；`s_Tracks` 加 4096 上限 | 巡检不再每秒 new 数百个 `Baseline`；追踪表有界 |
+
+### 8.3 预期收益（按第三节的算法折算）
+
+| 场景 | 优化前 | 预期优化后 | 依据 |
+|---|---|---|---|
+| 进图（`GearItem.Awake` × 6000–8000） | 15–40 ms | **5–10 ms** | 每次 Awake 2 次 `NormalizeName`：1 µs → 0.06 µs |
+| `CanStackItems` 单次合并（O(n) 候选） | 1–1.5 ms | **0.1–0.2 ms** | 每个候选 `AreInterchangeable` 里 2 次 `NormalizeName` |
+| 批量存箱（20–30 件） | 30–45 ms | **10–15 ms** | 只对真正变化的堆做完整对账，其余 0.1 µs/件 |
+| 做菜（每次） | 3–8 ms + 0.3 MB 垃圾 | **~0.2 ms + 0 垃圾** | Trace 直接返回 |
+| 稳态巡检（2 Hz × 512 件，其中 198 食物） | 0.4 ms/次 | **~0.1 ms/次** | 名字提速 + 食物基线不再分配 |
+
+以上是"托管实测 × 1.5–3× 互操作系数"的估算，仍未在游戏内计时（见第七节）。
+
+### 8.4 正确性说明
+
+- `SyncContainer` 的收窄有明确边界：只跳过"不属于本 mod 且单位数没变"的条目。
+  属于本 mod 但**还没有追踪记录**的堆一律放行，所以"首次合堆"不会漏——这一点比单纯比对单位数更重要。
+- 食物名字的登记（`RegisterFoodName`）保留了原来的副作用：`KnowsPrefab` 仍能答出食物 prefab，
+  否则读档后的堆会在 `Adopt` / `ExpandLegacyContent` 处被当成陌生组件跳过。
+- `s_Tracks` 清空是安全的：没有追踪记录的堆在下次被看到时按"首次见到"重新登记，
+  最坏结果是一次多余的登记，而不是一次错误的拆分。

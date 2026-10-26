@@ -41,23 +41,27 @@ namespace StackManager
 				DebugLog.Write("file does not exist, making");
 				SetupDefaultConfig();
 				JsonFile.Save<Config>(ConfigFile, Config);
-				return;
-			}
-
-			// NOTE: Config is initialised to a fresh instance, so it is never null here.
-			// A null-coalescing Load would short circuit and the file would never be read.
-			Config = LoadConfig();
-
-			if (Config.ConfigurationVersion != CurrentVersion)
-			{
-				UpdateConfig();
 			}
 			else
 			{
-				DebugLog.Write($"Loaded {ConfigFile} (v{Config.ConfigurationVersion}) - "
-					+ $"{Config.STACK_MERGE.Count} merge, {Config.Advanced.Count} advanced, "
-					+ $"{Config.AddStackableComponent.Count} stackable, {Config.MaxWeightStackItems.Count} food stack");
+				// NOTE: Config is initialised to a fresh instance, so it is never null here.
+				// A null-coalescing Load would short circuit and the file would never be read.
+				Config = LoadConfig();
+
+				if (Config.ConfigurationVersion != CurrentVersion)
+				{
+					UpdateConfig();
+				}
+				else
+				{
+					DebugLog.Write($"Loaded {ConfigFile} (v{Config.ConfigurationVersion}) - "
+						+ $"{Config.STACK_MERGE.Count} merge, {Config.Advanced.Count} advanced, "
+						+ $"{Config.AddStackableComponent.Count} stackable, {Config.MaxWeightStackItems.Count} food stack");
+				}
 			}
+
+			// Read last, so the names it adds to the config lists can never be written back into config.json above
+			AddItemsFile.Apply();
 		}
 
 		/// <summary>

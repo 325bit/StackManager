@@ -30,7 +30,8 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 **Interface**
 
 - A stacked liquid container shows its volume instead of an unreadable unit count on top of it.
-- Settings live in the ModSettings menu; the item lists live in `config.json`.
+- Settings live in the ModSettings menu; the item lists live in `config.json`, and anything missing can be added to
+  `StackManager_AddItems.txt` without touching the mod.
 
 ## Requirements
 
@@ -68,6 +69,26 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 An update only adds entries to these lists. What is already in the file stays as written, and a timestamped copy is
 kept next to it, so a name removed on purpose does not come back.
 
+### Adding your own items
+
+`Mods/StackManager_AddItems.txt` is for items the lists above do not cover. It is created on the first start and read
+on every start; write one prefab name per line:
+
+```
+#非液体
+GEAR_Charcoal
+
+#液体/重量可变
+GEAR_SomeLiquid
+```
+
+- Under `#非液体` the item gets ordinary stacking: whole units merge and the better of the two conditions is kept.
+- Under `#液体/重量可变` it gets whole-portion stacking, for liquids and for anything whose weight per unit can
+  change. Only a full unit joins a stack, and a recipe can take part of one without spoiling the rest.
+- A line starting with `#` is a note and a blank line is ignored, so the file can be kept commented. Names have to
+  match the game's spelling exactly, including case.
+- The file is only read, never written: deleting a line takes the item out again on the next start.
+
 ## Version
 
-1.1.1 — see [ChangeLog.md](ChangeLog.md).
+1.2.0 — see [ChangeLog.md](ChangeLog.md).

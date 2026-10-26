@@ -40,11 +40,14 @@ namespace StackManager.Utilities
 		private const float LoadHoldSeconds = 6f;
 
 		/// <summary>
-		/// An amount may exceed what the unit count can hold by this fraction before it is cut back.
+		/// How far past what its unit count can hold a stack may sit before the excess is cut back, in units.
 		/// </summary>
 		/// <remarks>
 		/// Used only for the upper bound. Rounding never makes an amount grow, so anything above a single unit's
 		/// worth has come from one item being handed the amount of the stack it was split off from.
+		/// Measured against the amount of one unit and not against the total: a stack of a hundred bags can lose a
+		/// whole bag and still sit within one percent of its total, which is how a container stack kept the content of
+		/// the unit that had just been taken out of it.
 		/// </remarks>
 		private const float ClampTolerance = 0.01f;
 
@@ -196,6 +199,9 @@ namespace StackManager.Utilities
 			// below finishes the job once the count has settled.
 			Clamp(gi, reason);
 
+			// The other direction: a copy built from the prefab is handed a unit count but only the content of one
+			FillToUnits(gi, reason);
+
 			ReadContent(gi, out float content);
 
 			s_Tracks[stack.GetInstanceID()] = new Track { Gear = gi, Units = Mathf.Max(1, stack.m_Units), Content = content };
@@ -259,7 +265,9 @@ namespace StackManager.Utilities
 			// Food states the amount of one unit, powder and liquid state the amount of the whole stack
 			float expected = kind == ContentKind.Food ? baseline.UnitContent : baseline.UnitContent * units;
 			if (expected <= 0f) return;
-			if (content <= expected * (1f + ClampTolerance)) return;
+
+			// Allowance is one unit's worth times this fraction, not a fraction of the whole total, see ClampTolerance
+			if (content <= expected + baseline.UnitContent * ClampTolerance) return;
 
 			string name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;
 
@@ -267,6 +275,50 @@ namespace StackManager.Utilities
 
 			DebugLog.Write($"Stack content: {name} held {content:F3} for {units} units, cut back to {expected:F3} "
 				+ $"({reason}) [{Audit(gi, kind)}]");
+		}
+
+		/// <summary>
+		/// Grows a stack that was built from the prefab with more than one unit, which leaves it holding one unit's worth.
+		/// </summary>
+		/// <remarks>
+		/// The game hands an item to a container or the bag by instantiating the prefab and then writing the unit count
+		/// onto the copy, so a copy of three bottles carries the volume of one - the amount is never taken from the
+		/// stack it was split off. A stack of ours always holds the amount of every unit in it, so an amount of exactly
+		/// one unit on a higher count can only be that copy.
+		/// Only call this at the moment such a copy is handed over. A stack a recipe has just taken something out of
+		/// can look the same - three bags with two of them consumed also hold exactly one bag - and raising that one
+		/// would hand the consumed amount back, which is why the sweep never does this.
+		/// </remarks>
+		public static void FillToUnits(GearItem? gi, string reason)
+		{
+			if (gi == null) return;
+			if (s_Loading) return;
+
+			StackableItem? stack = gi.m_StackableItem;
+			if (stack == null) return;
+			if (!AddedStackables.Contains(stack)) return;
+
+			int units = stack.m_Units;
+			if (units <= 1) return;
+
+			ContentKind kind = ReadContent(gi, out float content);
+
+			// Food and plain gear describe a single unit already, and the game multiplies that by the count itself
+			if (kind != ContentKind.Powder && kind != ContentKind.Liquid) return;
+
+			if (!TryGetBaseline(gi, kind, out Baseline? baseline)) return;
+			if (baseline == null || baseline.UnitContent <= 0f) return;
+
+			// Only the signature of a copy made from the prefab, so a stack something took a part out of is left alone
+			if (!Nearly(content, baseline.UnitContent)) return;
+
+			SetWholeUnits(gi, kind, baseline, units);
+
+			string name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;
+			float expected = baseline.UnitContent * units;
+
+			DebugLog.Write($"Stack content: {name} was handed {units} units holding one unit's worth, "
+				+ $"filled to {expected:F3} ({reason}) [{Audit(gi, kind)}]");
 		}
 
 		/// <summary>
