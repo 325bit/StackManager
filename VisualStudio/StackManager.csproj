@@ -14,8 +14,10 @@
 	<!-- DO NOT CHANGE ANYTHING BETWEEN THESE -->
 
 	<PropertyGroup>
-		<!-- This should point to wherever your games primary EXE is -->
-		<TheLongDarkPath>F:\SteamLibrary\steamapps\common\TheLongDark</TheLongDarkPath>
+		<!-- This should point to wherever your games primary EXE is.
+		     Defaults to the copy the game actually launches from; override with
+		     -p:TheLongDarkPath=... on the command line without editing this file. -->
+		<TheLongDarkPath Condition="'$(TheLongDarkPath)' == ''">F:\GameAbouts\The Long Dark\TheLongDark_2.55</TheLongDarkPath>
 		<ReleaseFolderPath>D:\code\Csharp\The_Long_dark\StackManager\Release</ReleaseFolderPath>
 	</PropertyGroup>
 
@@ -47,8 +49,11 @@
 
 	<!-- This is a build event. It will copy your dll to the currently defined TheLongDarkPath's Mods folder -->
 	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
-		<!-- This copies the mods files to the games mod dir -->
-		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(TheLongDarkPath)/Mods" />
+		<!-- This copies the mods files to the games mod dir.
+		     The game locks the dll while it is running, so a failed copy only warns
+		     instead of failing the build; the fresh dll still lands in the release
+		     folder and gets deployed by the next build after the game is closed. -->
+		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(TheLongDarkPath)/Mods" Retries="0" ContinueOnError="WarnAndContinue" />
 		<!-- This copies the mods files to a designated release folder. Speeds up finding the dll after a build -->
 		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ReleaseFolderPath)" />
 	</Target>

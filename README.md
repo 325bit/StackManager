@@ -26,6 +26,9 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 - A recipe takes what it asks for. A 10 kg stack of meat minus a 0.5 kg recipe leaves 9 kg stacked plus a separate
   0.5 kg piece.
 - Stacks saved by an older version are corrected when the save loads.
+- A stack left in a curing box keeps its count through a save, and a cured stack comes out with every piece intact.
+- A curing box takes the pieces of a stack that fit instead of refusing the whole stack, and the rest stays in the
+  backpack as its own stack.
 
 **Interface**
 
@@ -91,4 +94,4 @@ GEAR_SomeLiquid
 
 ## Version
 
-1.2.0 — see [ChangeLog.md](ChangeLog.md).
+1.3.0 — see [ChangeLog.md](ChangeLog.md).

@@ -1,3 +1,27 @@
+# Stack Manager v1.3.0
+
+## Fixed
+
+- **A stack heavier than the free space in a curing box could not go in at all.** The box weighs an item as a whole
+  before it takes any of it, and a stack of ours reports every unit at once, so twenty one pieces of kilo meat were
+  twenty one kilos to that check and not one of them entered an empty twenty kilo box. The box now takes the pieces
+  that fit and hands the rest back as its own stack in the backpack. A move the box refuses for any other reason puts
+  the whole stack back the way it was.
+
+---
+
+# Stack Manager v1.2.2
+
+## Fixed
+
+- **A stack put into a curing box came back as one piece.** The box saves a piece as a prefab, a condition and a
+  remaining fraction, with no field for a unit count, so twenty pieces were written as one and the other nineteen
+  were gone the moment the save was loaded. The count now travels in that fraction and is read back when the box
+  rebuilds the piece, both when a save loads and when a piece finishes curing and is replaced by the cured one.
+  Pieces lost to a save written before this version cannot be recovered.
+
+---
+
 # Stack Manager v1.2.1
 
 ## Fixed

@@ -322,6 +322,52 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>
+		/// Changes how many units a stack claims, and the amount it holds with them.
+		/// </summary>
+		/// <remarks>
+		/// Only for a caller that knows both numbers, which so far means a place that decides how much of a stack it
+		/// is willing to take: a curing box that is part way full takes the units that fit and the rest stays behind
+		/// as its own stack. The amount is scaled from the units the stack holds now, not from a full unit, so a stack
+		/// of half eaten pieces keeps its ratio on both sides of the split.
+		/// Merging and splitting stay where they are: those go through the game's own raising and lowering, and only
+		/// the check below watches for a count that ran away from the amount.
+		/// </remarks>
+		public static bool Resize(GearItem? gi, int units, string reason)
+		{
+			if (gi == null) return false;
+			if (s_Loading) return false;
+
+			StackableItem? stack = gi.m_StackableItem;
+			if (stack == null) return false;
+			if (!AddedStackables.Contains(stack)) return false;
+
+			int current = stack.m_Units;
+			if (units < 1 || units == current) return false;
+
+			ContentKind kind = ReadContent(gi, out float content);
+			if (kind == ContentKind.None) return false;
+
+			if (!TryGetBaseline(gi, kind, out Baseline? baseline)) return false;
+			if (baseline == null || baseline.UnitContent <= 0f) return false;
+
+			// A weight written by a build before this one has to go before the count is trusted again
+			if (kind == ContentKind.Food) RepairFoodWeight(gi, baseline);
+			else RestoreContainerWeight(gi, baseline);
+
+			ScaleTo(gi, kind, baseline, content, current, units);
+			stack.m_Units = units;
+
+			ReadContent(gi, out float after);
+			s_Tracks[stack.GetInstanceID()] = new Track { Gear = gi, Units = units, Content = after };
+
+			string name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;
+
+			DebugLog.Write($"Stack content: {name} resized from {current} to {units} units ({reason}) [{Audit(gi, kind)}]");
+
+			return true;
+		}
+
+		/// <summary>
 		/// Declares the amount a loaded stack carries to be the amount it should carry.
 		/// </summary>
 		/// <remarks>
@@ -928,6 +974,51 @@ namespace StackManager.Utilities
 			gi.WeightKG = FromKilograms(baseline.UnitWeightKg);
 		}
 
+		/// <summary>Carries the amount a stack holds from one unit count to another</summary>
+		/// <remarks>
+		/// Food states the amount of a single unit and the game multiplies that by the count itself, so only the
+		/// weight needs putting back. A powder or a liquid states the total of the whole stack, so that total has to
+		/// follow the count or every unit but the first would be unaccounted for.
+		/// </remarks>
+		private static void ScaleTo(GearItem gi, ContentKind kind, Baseline baseline, float content, int from, int to)
+		{
+			float perUnit = content / Mathf.Max(1, from);
+
+			switch (kind)
+			{
+				case ContentKind.Powder:
+					if (gi.m_PowderItem != null)
+					{
+						float amount = perUnit * to;
+
+						gi.m_PowderItem.m_Weight = FromKilograms(amount);
+
+						if (baseline.UnitLimit > 0f)
+						{
+							gi.m_PowderItem.m_WeightLimit = FromKilograms(Mathf.Max(baseline.UnitLimit * to, amount));
+						}
+					}
+					return;
+
+				case ContentKind.Liquid:
+					if (gi.m_LiquidItem != null)
+					{
+						float amount = perUnit * to;
+
+						gi.m_LiquidItem.m_Liquid = ItemLiquidVolume.FromLiters(amount);
+
+						if (baseline.UnitLimit > 0f)
+						{
+							gi.m_LiquidItem.m_LiquidCapacity = ItemLiquidVolume.FromLiters(Mathf.Max(baseline.UnitLimit * to, amount));
+						}
+					}
+					return;
+			}
+
+			// A food item states the weight of one whole unit; a plain one writes it the same way
+			gi.WeightKG = FromKilograms(baseline.UnitWeightKg);
+		}
+
 		/// <summary>Fills a single, partly used unit</summary>
 		/// <remarks>
 		/// The capacity and limit stay at one full unit: that is what makes the game - and the merge rules here - see
@@ -1152,8 +1243,12 @@ namespace StackManager.Utilities
 			return baseline;
 		}
 
-		/// <summary>Puts the leftover unit into the player's inventory, unless the game already put it there</summary>
-		private static void PlaceInInventory(GearItem part, GearItem source)
+		/// <summary>Puts a stack into the player's inventory, unless the game already put it there</summary>
+		/// <remarks>
+		/// Also used for a stack this mod took out of another one on purpose - the units a curing box could not take
+		/// go back into the bag as their own stack.
+		/// </remarks>
+		internal static void PlaceInInventory(GearItem part, GearItem source)
 		{
 			Inventory? inventory = GameManager.GetInventoryComponent();
 			if (inventory == null) return;
@@ -1171,7 +1266,7 @@ namespace StackManager.Utilities
 			}
 		}
 
-		private static bool Holds(Inventory inventory, GearItem gi)
+		internal static bool Holds(Inventory inventory, GearItem gi)
 		{
 			Il2CppSystem.Collections.Generic.List<GearItemObject>? items = inventory.m_Items;
 			if (items == null) return false;
