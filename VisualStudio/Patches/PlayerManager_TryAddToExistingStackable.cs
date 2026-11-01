@@ -1,4 +1,6 @@
-﻿namespace StackManager.Patches
+﻿using StackManager.Utilities;
+
+namespace StackManager.Patches
 {
 	/* Logic:
 		The game calls this when an item is about to be merged into a stack that already lives in the player inventory.
@@ -12,8 +14,10 @@
 		/// The fourth parameter is <c>out GearItem</c> in the game's signature, not <c>ref</c>, so it is flagged as
 		/// <see cref="ArgumentType.Out"/>. Declaring it as Ref made Harmony read a value that the caller never wrote.
 		/// </summary>
-		public static bool Prefix(ref GearItem gearToAdd, float normalizedCondition, int numUnits, ref GearItem? existingGearItem, ref bool __result)
+		public static bool Prefix(ref GearItem gearToAdd, float normalizedCondition, int numUnits, ref GearItem? existingGearItem, out StackContentSync.MergePart __state, ref bool __result)
 		{
+			__state = default;
+
 			if (GameManager.IsMainMenuActive()) return true;
 			if (gearToAdd == null) return true;
 
@@ -26,7 +30,14 @@
 				return false;
 			}
 
-			if (gearToAdd.gameObject.GetComponent<StackableItem>() != null) return true;
+			if (gearToAdd.gameObject.GetComponent<StackableItem>() != null)
+			{
+				// Vanilla path. The game will raise the unit count of whichever stack it picks and leave the amount
+				// where it was, so what this item carries is read now and poured in by the Postfix below.
+				__state = StackContentSync.CaptureMerge(gearToAdd, numUnits);
+
+				return true;
+			}
 
 			bool runVanilla = StackingUtilities.Do(gearToAdd, normalizedCondition, numUnits, ref existingGearItem);
 
@@ -41,11 +52,24 @@
 		/// Brings the content of the stack that accepted the item back in line with its unit count.
 		/// </summary>
 		/// <remarks>
-		/// A vanilla merge raises the count inside the game without calling anything managed, so the content the stack
-		/// shares would stay where it was: a stack of three bags would still weigh one bag.
+		/// A vanilla merge only adds to <c>StackableItem.m_Units</c>; nothing moves the amount across. For food and
+		/// plain gear that is invisible, because one unit's worth is multiplied by the count, but a powder or a liquid
+		/// holds the total of the stack in one field, so the amount the joining item carried has to be added here.
+		/// Without it the receiving stack kept the amount it had before the merge, and the repair that reads the count
+		/// back out of that amount scaled it by the new count instead - a bag with two thirds of its salt left that
+		/// took a stack of seven came out holding five and a third bags' worth instead of seven and two thirds.
 		/// </remarks>
-		public static void Postfix(ref GearItem? __3)
+		public static void Postfix(ref GearItem? __3, StackContentSync.MergePart __state)
 		{
+			try
+			{
+				StackContentSync.ApplyMerge(__3, __state);
+			}
+			catch (Exception e)
+			{
+				DebugLog.Write($"Stack content: merged amount not added, {e.Message}");
+			}
+
 			StackContentSync.EnsureSynced(__3, "inventory merge");
 		}
 	}

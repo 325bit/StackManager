@@ -1,3 +1,42 @@
+# Stack Manager v1.3.2
+
+## Fixed
+
+- **Salt went missing every time a bag was put into a curing box and taken out again.** Merging one item into a
+  stack is the game's job, and all it does is add the unit count of the one to the other: it never moves the amount
+  across. That is invisible for food and plain gear, which describe a single unit and are multiplied by the count,
+  and it is right for two stacks of full bags - seven full ones that take an eighth hold eight. A bag the box has
+  already taken salt out of is not a full bag, though. Two thirds of a bag that took a stack of seven kept the salt
+  of the two thirds it was, the repair that reads the count back out of the amount scaled that two thirds by eight,
+  and the bag came back holding five and a third bags worth instead of seven and two thirds. Each round trip through
+  the box therefore took roughly half of what was left. The amount the joining item carries is now added to the stack
+  that takes it, before anything compares the count against the amount. Any liquid container that stacks is
+  repaired by the same change, which it needed for the same reason.
+
+---
+
+# Stack Manager v1.3.1
+
+## Fixed
+
+- **Interacting with a curing box emptied the stack count off the salt bags.** A curing box does not keep salt as
+  bags: it holds each bag aside and, when the lid closes, pours what it carries into its own salt store, subtracting
+  from the bag and destroying it once nothing is left. The unit count is never touched, because in the game every bag
+  is one unit. A stack of twenty bags is one item carrying the salt of twenty, so the box took one bag's worth out of
+  the middle of it and handed it back still claiming twenty - and the count on the bag was the number the player saw.
+  The count is now read back out of the salt that is left, on the way out of the box. Bags already written off this
+  way come back right the next time they pass through a box.
+- **Powder handed back as an amount came back as a single bag.** A recipe, a harvest and a full container all give
+  salt and flour back as a weight, and the game answers that by building one bag from the prefab and pouring the whole
+  amount into it - six and two thirds of a kilo of salt became one bag holding all of it. The count is now read out of
+  the amount, so the same six and two thirds becomes six bags and one that is two thirds full.
+- **A bag of salt was measured against the box's meat space.** The box skips its own capacity check for anything that
+  carries a powder, because salt is not stored as meat, but the piece-by-piece fit added in 1.3.0 did not: a stack of
+  salt bags was cut at the line of the free meat space and the part that fitted went into the box. Salt bags are now
+  left alone by that fit, exactly as the box leaves them alone.
+
+---
+
 # Stack Manager v1.3.0
 
 ## Fixed

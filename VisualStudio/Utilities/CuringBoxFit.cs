@@ -46,6 +46,12 @@ namespace StackManager.Utilities
 			if (units < 2) return none;
 			if (!AddedStackables.Contains(stack)) return none;
 
+			// A powder never reaches the check this works around: the box skips its capacity test for any item that
+			// carries a PowderItem, because salt is not stored as meat. Cutting one here is worse than useless - a
+			// bag of salt would be measured against the meat space left, split at that line, and the part that fits
+			// would be poured into the salt store while the rest went back with a count nobody asked for.
+			if (gear.m_PowderItem != null) return none;
+
 			int whole = Grams(gear.GetItemWeightKG(false));
 			if (whole <= 0) return none;
 

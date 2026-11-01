@@ -1,4 +1,4 @@
-using Il2CppTLD.Gear;
+﻿using Il2CppTLD.Gear;
 using Il2CppTLD.IntBackedUnit;
 
 namespace StackManager.Utilities
@@ -51,12 +51,24 @@ namespace StackManager.Utilities
 		/// </remarks>
 		private const float ClampTolerance = 0.01f;
 
-		private enum ContentKind
+		public enum ContentKind
 		{
 			None,
 			Powder,
 			Liquid,
 			Food
+		}
+
+		/// <summary>What one item is about to hand to the stack it merges into</summary>
+		/// <remarks>
+		/// Carried between the two halves of a merge hook: the amount has to be read while the item still exists and
+		/// poured in after the game has raised the unit count of the stack that took it.
+		/// </remarks>
+		public struct MergePart
+		{
+			public bool Valid;
+			public ContentKind Kind;
+			public float Content;
 		}
 
 		/// <summary>What one full unit of a prefab holds, recorded from the prefab itself</summary>
@@ -368,6 +380,153 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>
+		/// Gives a bag the game has just built from an amount the unit count that amount stands for.
+		/// </summary>
+		/// <remarks>
+		/// Powder never travels as an item: a salt tank, a recipe and a harvest all describe it as an amount, and the
+		/// bag that carries it back into the pack is built from the prefab, so it starts at one unit and is then
+		/// handed every kilo at once. Nothing else repairs that state - one bag holding six kilos of salt looks
+		/// exactly like one bag that is two thirds used - so the count can only be read out of the amount here, at
+		/// the moment the game hands it over.
+		/// Whatever is left over after the whole units is split off by the same repair the idle check runs, so six
+		/// and two thirds becomes six bags and one that is two thirds full.
+		/// </remarks>
+		public static bool RebuildFromAmount(GearItem? gi, ItemWeight amount, string reason)
+		{
+			if (gi == null) return false;
+			if (s_Loading) return false;
+
+			StackableItem? stack = gi.m_StackableItem;
+			if (stack == null) return false;
+
+			ContentKind kind = ReadContent(gi, out float content);
+			if (kind == ContentKind.None) return false;
+
+			// A food item states the amount of one unit, so an amount says how full it is, not how many there are
+			if (kind == ContentKind.Food) return false;
+
+			if (!TryGetBaseline(gi, kind, out Baseline? baseline)) return false;
+			if (baseline == null || baseline.UnitContent <= 0f) return false;
+
+			// The amount that was handed over, not what the bag holds: it was built from the prefab a moment ago
+			float held = ToKilograms(amount);
+			if (held <= 0f) held = content;
+
+			int whole = Mathf.FloorToInt(held / baseline.UnitContent + 0.001f);
+			if (whole < 2 || whole <= stack.m_Units) return false;
+
+			if (!AddedStackables.Contains(stack)) AddedStackables.Register(stack);
+
+			// Written before the repair below: with a count of one, every amount looks like more than the bag can
+			// hold, and the repair would cut it down to a single unit instead of reading the count out of it
+			stack.m_Units = whole;
+
+			Normalize(gi, stack, kind, content, reason);
+
+			ReadContent(gi, out float after);
+			s_Tracks[stack.GetInstanceID()] = new Track { Gear = gi, Units = stack.m_Units, Content = after };
+
+			string name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;
+
+			DebugLog.Write($"Stack content: {name} came back as {stack.m_Units} units worth {held:F2} ({reason})");
+
+			return true;
+		}
+
+		/// <summary>
+		/// Reads the amount an item is about to hand to the stack it merges into.
+		/// </summary>
+		/// <remarks>
+		/// The game's merge only raises the unit count of the stack that takes the item; it never moves a gram. That
+		/// is right for food and plain gear, which describe one unit and are multiplied by the count, and it is right
+		/// for a stack of full units, because a stack of three that takes a fourth holds four.
+		/// It is wrong the moment the two sides hold different amounts. A bag with two thirds of its salt left that
+		/// takes a stack of seven would keep claiming the salt of the single bag it was - and the repair that reads
+		/// the count back would multiply that one bag by eight, which is how a bag lost half its salt every time it
+		/// was put down next to a full stack. The amount therefore has to be carried across, so it is read here,
+		/// while the item still exists and still agrees with itself.
+		/// </remarks>
+		public static MergePart CaptureMerge(GearItem? gi, int numUnits)
+		{
+			MergePart part = default;
+
+			if (gi == null) return part;
+
+			StackableItem? stack = gi.m_StackableItem;
+			if (stack == null) return part;
+			if (!AddedStackables.Contains(stack)) return part;
+
+			ContentKind kind = ReadContent(gi, out float content);
+
+			// Food and plain gear hold one unit's worth in a field the game multiplies by the count itself
+			if (kind != ContentKind.Powder && kind != ContentKind.Liquid) return part;
+
+			// A caller that hands over part of a stack is taken at its word, and only that share travels with it
+			int held = Mathf.Max(1, stack.m_Units);
+			float share = numUnits > 0 ? Mathf.Clamp01((float)numUnits / held) : 1f;
+
+			part.Valid = true;
+			part.Kind = kind;
+			part.Content = content * share;
+
+			return part;
+		}
+
+		/// <summary>
+		/// Pours the amount a merge brought into the stack that took it.
+		/// </summary>
+		/// <remarks>
+		/// Runs before the stack is brought back in step, because until the amount has arrived the count and the
+		/// content describe two different stacks, and every repair that reads them agrees with whichever one it
+		/// happens to read first - the amount would be cut to fit the count, or the count would be scaled to fit the
+		/// amount, and the salt that was meant to come across would be gone either way.
+		/// </remarks>
+		public static void ApplyMerge(GearItem? target, MergePart part)
+		{
+			if (!part.Valid) return;
+			if (target == null) return;
+
+			StackableItem? stack = target.m_StackableItem;
+			if (stack == null) return;
+			if (!AddedStackables.Contains(stack)) return;
+
+			ContentKind kind = ReadContent(target, out float content);
+
+			// Merging only ever joins two items of the same prefab, so a mismatch means this is not that merge
+			if (kind != part.Kind) return;
+
+			float after = content + part.Content;
+			int units = Mathf.Max(1, stack.m_Units);
+
+			switch (kind)
+			{
+				case ContentKind.Powder:
+					if (target.m_PowderItem == null) return;
+
+					target.m_PowderItem.m_Weight = FromKilograms(after);
+					ResizeLimit(target, kind, units, after);
+
+					break;
+
+				case ContentKind.Liquid:
+					if (target.m_LiquidItem == null) return;
+
+					target.m_LiquidItem.m_Liquid = ItemLiquidVolume.FromLiters(after);
+					ResizeLimit(target, kind, units, after);
+
+					break;
+
+				default:
+					return;
+			}
+
+			string name = CommonUtilities.NormalizeName(target.name) ?? target.name ?? string.Empty;
+
+			DebugLog.Write($"Stack content: {name} took {part.Content:F3} in a merge, now holds {after:F3} "
+				+ $"[{Audit(target, kind)}]");
+		}
+
+		/// <summary>
 		/// Declares the amount a loaded stack carries to be the amount it should carry.
 		/// </summary>
 		/// <remarks>
@@ -646,6 +805,27 @@ namespace StackManager.Utilities
 		public static float ToKilograms(ItemWeight weight)
 		{
 			return weight / ItemWeight.FromKilograms(1f);
+		}
+
+		/// <summary>
+		/// The amount one whole unit of this prefab is made with, or 0 when nothing is known about it.
+		/// </summary>
+		/// <remarks>
+		/// Taken from the prefab rather than from the item, which matters for anything that reads it back to work out
+		/// how many units a remaining amount stands for: an item that has already been topped up or drawn from holds
+		/// a per unit figure that drifted with it, and dividing by that number repeats the drift instead of
+		/// correcting it.
+		/// </remarks>
+		public static float UnitContentOfPrefab(GearItem? gi)
+		{
+			if (gi == null) return 0f;
+
+			ContentKind kind = ReadContent(gi, out float _);
+			if (kind == ContentKind.None) return 0f;
+
+			if (!TryGetBaseline(gi, kind, out Baseline? baseline)) return 0f;
+
+			return baseline == null ? 0f : baseline.UnitContent;
 		}
 
 		public static ItemWeight FromKilograms(float kilograms)

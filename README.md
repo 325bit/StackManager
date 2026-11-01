@@ -29,6 +29,10 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
 - A stack left in a curing box keeps its count through a save, and a cured stack comes out with every piece intact.
 - A curing box takes the pieces of a stack that fit instead of refusing the whole stack, and the rest stays in the
   backpack as its own stack.
+- Salt bags keep their count when a curing box tops up its salt store from them, and a bag of salt is never measured
+  against the box's meat space.
+- Two stacks that carry their amount in one place - a powder or a liquid - merge into the sum of what they hold,
+  instead of one of them being scaled up to the other's unit count.
 
 **Interface**
 
@@ -94,4 +98,4 @@ GEAR_SomeLiquid
 
 ## Version
 
-1.3.0 — see [ChangeLog.md](ChangeLog.md).
+1.3.2 — see [ChangeLog.md](ChangeLog.md).
