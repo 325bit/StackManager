@@ -47,6 +47,26 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>
+		/// True when this item is one of the whole portion stacks this mod keeps, whether or not the component that
+		/// carries its count is one <see cref="AddedStackables"/> still remembers.
+		/// </summary>
+		/// <remarks>
+		/// The unit count is written to the save, but the component carrying it belongs to the prefab, so the game
+		/// rebuilds it while loading and it never passes through the code that registers one. Every rule here used to
+		/// skip such a stack, which is why a stack of liquid read back from a save stopped being split at all while
+		/// one created in the same session kept working.
+		/// Only the names this mod is configured to stack as whole portions are claimed, so nothing the game or
+		/// another mod made stackable on its own is taken over.
+		/// </remarks>
+		public static bool IsManagedItem(GearItem? gi)
+		{
+			if (gi == null) return false;
+			if (gi.m_StackableItem == null) return false;
+
+			return IsConfiguredIngredient(CommonUtilities.NormalizeName(gi.name) ?? string.Empty);
+		}
+
+		/// <summary>
 		/// True when this item must not take part in a stack merge.
 		/// </summary>
 		public static bool KeepsOutOfStack(GearItem? gi)

@@ -107,6 +107,9 @@ namespace StackManager
 		/// </remarks>
 		public override void OnUpdate()
 		{
+			// Redraws a flask that changed under the panel showing it; a no-op unless one was asked for
+			FlaskView.Tick();
+
 			if (Time.unscaledTime < s_NextIdleCheck) return;
 
 			s_NextIdleCheck = Time.unscaledTime + IdleCheckInterval;

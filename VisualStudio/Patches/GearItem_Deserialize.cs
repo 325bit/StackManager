@@ -90,6 +90,18 @@ namespace StackManager.Patches
 
 				if (stack == null) return;
 
+				// The count is saved but the component is not, so the game rebuilds it from the prefab while loading
+				// and it never goes through AddStackable - which leaves every rule in this mod treating it as
+				// someone else's and skipping it. Only a name this mod is configured to stack as whole portions is
+				// claimed back, so a component the game made stackable on its own is left alone.
+				if (savedUnits > 1 && !AddedStackables.Contains(stack) && FoodStackingRules.IsManagedItem(__instance))
+				{
+					AddedStackables.Register(stack);
+
+					DebugLog.Write($"Claimed back {__instance.name} with {savedUnits} units, the component came from "
+						+ "the save rather than from this session");
+				}
+
 				if (savedUnits > 1 && stack.m_Units != savedUnits)
 				{
 					DebugLog.Write($"Restored {savedUnits} units on {__instance.name} (was {stack.m_Units})");

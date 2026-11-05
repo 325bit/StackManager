@@ -1,3 +1,56 @@
+# Stack Manager v1.3.6
+
+## Fixed
+
+- **The flask still refused a stack, because the split knew bottles and the drinks are cups.** What the flask
+  accepts is not a bottle at all: a cup of tea, coffee or soup in this build carries its drink in a DrinkItem,
+  which works the volume out from the weight of the item - a cup is as many litres as it is kilograms. The split
+  only read LiquidItem, so it saw no volume in a stack of cups, stepped aside, and the flask went on turning the
+  whole stack away for weighing more than the room it had left. A drink stack is now measured the same way the
+  flask measures it, cut to what fits, and the rest stays in the bag; a drink needs no volume written on the
+  leftover, because its units settle what it weighs.
+- **A redraw that never shows itself cannot be told apart from one that never ran.** The refresh of the flask's
+  counters hangs on a hook and a frame delay, and when the numbers stay stale there was nothing in the log to say
+  whether the refresh ran and the panels ignored it or the refresh never happened. Every redraw that actually
+  goes out is now written to the debug log.
+
+---
+
+# Stack Manager v1.3.5
+
+## Fixed
+
+- **The flask fix of 1.3.4 did not fire for stacks that had come out of a save.** The split only touched stacks this
+  mod had registered, and a stack loaded from a save carries a component the game rebuilds on its own, which the
+  registry never sees. Every stack of liquid in a save was therefore invisible to the split, and the flask went on
+  refusing all of it. A stack is now recognised by its name on the list of items this mod stacks, which is how the
+  rest of the mod already tells its stacks apart, so a stack does not have to have been created in this session to
+  be taken apart.
+- **A drink left the flask printing its old weight, and there was nothing in the log to say why.** The redraw of
+  the panels hangs on one hook, and a hook that failed to attach looks exactly like a hook that never had anything
+  to do. The first recalculation a flask makes is now written to the log on purpose, so an install that did not
+  take shows itself instead of hiding behind the game.
+
+---
+
+# Stack Manager v1.3.4
+
+## Fixed
+
+- **A stack of liquid could not go into an insulated flask at all.** The flask adds up its own volume and the
+  volume of the item it is offered, and refuses the item outright when the sum passes what it holds. That is the
+  same shape of check a curing box makes, and it goes wrong the same way: a stack of ours carries every unit in it
+  at once, so five bottles of cooking oil were five bottles to a one litre flask and not one of them went in. The
+  bottles that fit are taken and the rest stays in the bag as its own stack, exactly as a curing box now takes the
+  pieces of a stack that fit.
+- **A flask kept printing the weight and the amount it had before a drink.** Drinking from a flask takes a bottle
+  out, drinks part of it and puts what is left back, and each of those steps makes the flask work out its volume
+  and its weight again - but nothing told the panels, so the bag went on showing the old weight and the list inside
+  the flask went on showing the units it used to hold. Both are asked to redraw the moment the flask recalculates
+  itself, which is the one place every one of those steps passes through.
+
+---
+
 # Stack Manager v1.3.3
 
 ## Fixed
