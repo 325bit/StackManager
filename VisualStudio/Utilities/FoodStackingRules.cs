@@ -69,6 +69,34 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>
+		/// True when this unit is only part of one, and so must not be the stack that other units merge into.
+		/// </summary>
+		/// <remarks>
+		/// <see cref="KeepsOutOfStack"/> stops a part from travelling into a stack; this is the other direction, and
+		/// it is the one that goes wrong quietly. A merge reads the stack that takes the units in and raises its
+		/// count, never asking what it held: sixty six whole pieces merged into a piece with a bite taken out of it
+		/// gave sixty seven units carrying the calories of the one, and every later repair then weighed the whole
+		/// stack as that fraction. Refusing the match leaves the item to be added as a stack of its own.
+		/// </remarks>
+		public static bool RefusesToTakeUnits(GearItem? gi)
+		{
+			if (!IsEnabled) return false;
+			if (gi == null) return false;
+
+			StackableItem? stack = gi.m_StackableItem;
+
+			// A component this mod did not create follows whatever rules its owner set up
+			if (stack == null) return false;
+			if (!AddedStackables.Contains(stack)) return false;
+
+			if (!IsPartialUnit(gi)) return false;
+
+			DebugLog.Write($"FoodStack: {Describe(gi)} is partial, keeping other units out of it");
+
+			return true;
+		}
+
+		/// <summary>
 		/// True when this unit is not the full weight it was created with.
 		/// </summary>
 		/// <remarks>

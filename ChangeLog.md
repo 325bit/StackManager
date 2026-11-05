@@ -1,3 +1,30 @@
+# Stack Manager v1.3.3
+
+## Fixed
+
+- **A stack of sixty seven pieces of meat in the trader's exchange box weighed 0.67 kg.** A part of a unit - a
+  piece with a bite taken out of it - was allowed to be the stack that other units merged into. Every merge in the
+  game works the same way: it finds the closest matching stack, adds the incoming count to it, and moves no content
+  across. Two stacks of whole pieces come out right, because a whole piece is what the count is multiplied by. A
+  part does not: sixty six whole pieces merged into the piece with a bite out of it gave sixty seven units carrying
+  the calories of that one piece, and food is weighed by the calories it holds, so the whole stack weighed a
+  hundredth of a piece each. A part is now answered with "no match", which every caller already handles by adding
+  the item as a stack of its own. The bag, a container and the exchange box all go through the same call, so all
+  three are covered, and a stack that still ends up holding more units than it has content for is read back out of
+  that content on the spot.
+- **A weight written from a piece that was almost gone followed the item forever.** How heavy one whole unit is was
+  read from the item itself, scaled back up by the calories that were left. On a piece with a few calories in it
+  that number lands anywhere, and it was then used to weigh whole ones: a stack that was recounted against such a
+  piece was stamped with a hundredth of a kilo and stayed like that, because the value is saved with the item.
+  Below five percent of its calories the prefab is used instead, which is the only weight that cannot have been
+  written over.
+- **A whole piece could be saved weighing a fraction of itself.** The same value is what the weight of a piece is
+  repaired against, so a piece that had already been written down to a fraction agreed with itself and was never
+  corrected. A piece that still holds every calorie of a whole unit but weighs less than nine tenths of it is now
+  put back to the weight the prefab gives it.
+
+---
+
 # Stack Manager v1.3.2
 
 ## Fixed

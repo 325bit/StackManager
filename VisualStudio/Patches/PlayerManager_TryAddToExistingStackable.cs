@@ -71,6 +71,10 @@ namespace StackManager.Patches
 			}
 
 			StackContentSync.EnsureSynced(__3, "inventory merge");
+
+			// A stack that was a part of a unit when it took these units in can only describe them by lowering its
+			// count again: the merge raised the count and left the amount where it was
+			StackContentSync.Settle(__3, "units merged into a part");
 		}
 	}
 }

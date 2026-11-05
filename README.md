@@ -33,6 +33,7 @@ honest: weights, contents and recipe requirements stay correct after a merge, a 
   against the box's meat space.
 - Two stacks that carry their amount in one place - a powder or a liquid - merge into the sum of what they hold,
   instead of one of them being scaled up to the other's unit count.
+- A piece that is not whole never takes other pieces in, so a part cannot leave a stack claiming more than it holds.
 
 **Interface**
 
@@ -98,4 +99,4 @@ GEAR_SomeLiquid
 
 ## Version
 
-1.3.2 — see [ChangeLog.md](ChangeLog.md).
+1.3.3 — see [ChangeLog.md](ChangeLog.md).

@@ -568,6 +568,60 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>
+		/// Reads the unit count of a stack back out of the amount it holds, right after something merged into it.
+		/// </summary>
+		/// <remarks>
+		/// A merge only ever adds to the count. When the stack that takes the units in was a part of a unit, the
+		/// count now describes more than the amount does, and <see cref="EnsureSynced"/> cannot see it: that compares
+		/// the amount against the last one it saw, and the amount did not move. This asks the ordinary repair instead,
+		/// which keeps the units the amount covers and splits off whatever is left over.
+		/// </remarks>
+		public static void Settle(GearItem? gi, string reason)
+		{
+			if (s_Busy) return;
+
+			s_Busy = true;
+
+			try
+			{
+				SettleStack(gi, reason);
+			}
+			finally
+			{
+				s_Busy = false;
+			}
+		}
+
+		/// <summary>Body of <see cref="Settle"/>, kept separate so the guard above covers every exit</summary>
+		private static void SettleStack(GearItem? gi, string reason)
+		{
+			if (s_Loading) return;
+			if (gi == null) return;
+
+			StackableItem? stack = gi.m_StackableItem;
+			if (stack == null) return;
+			if (!AddedStackables.Contains(stack)) return;
+
+			// A stack of one is allowed to be a part: that is exactly what the game itself hands out after a bite
+			if (stack.m_Units < 2) return;
+			if (!FoodStackingRules.IsPartialUnit(gi)) return;
+
+			ContentKind kind = ReadContent(gi, out float content);
+			if (kind == ContentKind.None) return;
+
+			if (!Normalize(gi, stack, kind, content, reason)) return;
+
+			ReadContent(gi, out content);
+
+			s_Tracks[stack.GetInstanceID()] = new Track
+			{
+				Gear = gi,
+				Units = stack.m_Units,
+				Content = content
+			};
+		}
+
+		/// <summary>
 		/// Compares a stack against the amount it was last seen with and repairs whichever of the two moved.
 		/// </summary>
 		/// <param name="immediate">
@@ -692,6 +746,10 @@ namespace StackManager.Utilities
 				if (!NeedsContainerSync(gi)) continue;
 
 				Reconcile(gi, "container merge", true);
+
+				// A merge raises the count and leaves the amount alone, so a stack that was a part of a unit before
+				// it took the units in is only corrected by reading its count back out of that amount
+				Settle(gi, "units merged into a part in a container");
 			}
 		}
 
@@ -1246,32 +1304,46 @@ namespace StackManager.Utilities
 		/// </summary>
 		/// <remarks>
 		/// A food item stores the weight of a whole unit and the game scales it by the calories that are left, so a
-		/// half eaten piece is shown at half its weight without anything being written. A build before this one
-		/// wrote the calorie share into the weight as well, which the game then scaled again - a 0.5 kg piece came
-		/// out as 0.25 kg, and the number is saved along with the item so it would never correct itself.
-		/// Only a value that is exactly the old mistake is touched, so a weight another mod chose on purpose stays.
+		/// half eaten piece is shown at half its weight without anything being written. Two mistakes are undone here,
+		/// each recognised by its own signature and nothing else touched, so a weight another mod chose stays:
+		/// a build before this one wrote the calorie share into the weight as well, which the game then scaled again -
+		/// a 0.5 kg piece came out as 0.25 kg - and a unit whose count was repaired against a piece that was almost
+		/// gone was written as the fraction of a unit that piece was taken for, while still holding all its calories.
+		/// Both numbers are saved with the item, so neither corrects itself.
+		/// Measured against the prefab, never against the weight the item carries: that is the value that went wrong.
 		/// </remarks>
 		private static void RepairFoodWeight(GearItem gi, Baseline baseline)
 		{
-			if (baseline.UnitWeightKg <= 0f) return;
-
-			float current = ToKilograms(gi.WeightKG);
-			if (current <= 0f) return;
-			if (Nearly(current, baseline.UnitWeightKg)) return;
-
 			FoodItem? food = gi.m_FoodItem;
 			if (food == null || food.m_CaloriesTotal <= 0f) return;
 
-			float ratio = Mathf.Clamp01(food.m_CaloriesRemaining / food.m_CaloriesTotal);
-			if (ratio >= 1f - Epsilon) return;
-			if (!Nearly(current, baseline.UnitWeightKg * ratio)) return;
+			float whole = PrefabWeightOf(gi, baseline.UnitWeightKg);
+			if (whole <= 0f) return;
 
-			gi.WeightKG = FromKilograms(baseline.UnitWeightKg);
+			float current = ToKilograms(gi.WeightKG);
+			if (current <= 0f) return;
+			if (Nearly(current, whole)) return;
+
+			float ratio = Mathf.Clamp01(food.m_CaloriesRemaining / food.m_CaloriesTotal);
+
+			// Read against the weight the piece was measured with, because that is the number the mistake used
+			bool carriesShare = ratio < 1f - Epsilon
+				&& baseline.UnitWeightKg > 0f
+				&& Nearly(current, baseline.UnitWeightKg * ratio);
+
+			bool weighedAsPart = ratio >= 1f - Epsilon && current < whole * 0.9f;
+
+			if (!carriesShare && !weighedAsPart) return;
+
+			gi.WeightKG = FromKilograms(whole);
 
 			string name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;
 
-			ReportOnce($"food-weight:{name}", $"Stack content: {name} carried {current:F3} kg for a piece holding "
-				+ $"{ratio:P0} of its calories, which the game weighs again - put back to {baseline.UnitWeightKg:F3} kg");
+			ReportOnce($"food-weight:{name}", carriesShare
+				? $"Stack content: {name} carried {current:F3} kg for a piece holding {ratio:P0} of its calories, "
+					+ $"which the game weighs again - put back to {whole:F3} kg"
+				: $"Stack content: {name} carried {current:F3} kg while still holding every calorie of a whole unit - "
+					+ $"put back to {whole:F3} kg");
 		}
 
 		/// <summary>
@@ -1292,9 +1364,29 @@ namespace StackManager.Utilities
 			if (food == null || food.m_CaloriesTotal <= 0f) return single;
 
 			float ratio = Mathf.Clamp01(food.m_CaloriesRemaining / food.m_CaloriesTotal);
-			if (ratio < 0.05f) return single;
+
+			// A piece this close to empty says nothing about how heavy a whole one is: scaled back up it lands
+			// anywhere, and every later repair is measured against that number. Only the prefab is still whole.
+			if (ratio < 0.05f) return PrefabWeightOf(gi, single);
 
 			return single / ratio;
+		}
+
+		/// <summary>
+		/// The weight one whole unit of this prefab is made with, or the given fallback when the prefab says nothing.
+		/// </summary>
+		/// <remarks>
+		/// This is the only weight that cannot have been written over: the weight on a gear item is saved with it,
+		/// so a value an earlier build got wrong follows the item forever and any repair measured against it agrees
+		/// with itself and changes nothing.
+		/// </remarks>
+		private static float PrefabWeightOf(GearItem gi, float fallback)
+		{
+			if (gi.m_GearItemData == null) return fallback;
+
+			float prefab = ToKilograms(gi.m_GearItemData.BaseWeightKG);
+
+			return prefab > 0f ? prefab : fallback;
 		}
 
 		/// <summary>
