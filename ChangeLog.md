@@ -1,3 +1,16 @@
+# Stack Manager v1.3.7
+
+## Fixed
+
+- **A drink taken from the flask left the flask printing the weight it had before.** The drinking itself was
+  never wrong: one unit of the stack went out and the flask genuinely held less. But the flask works its own
+  weight and volume out only when an item enters or leaves it or its panel is opened, and nothing in the
+  drinking tells it that its contents just changed - so it went on reporting the weight of every cup it used
+  to hold until the player happened to open it. A finished drink now asks the flask holding it to recount,
+  which is also what wakes the redraw of the bag and the description.
+
+---
+
 # Stack Manager v1.3.6
 
 ## Fixed
