@@ -182,7 +182,7 @@ namespace StackManager.Utilities
 		}
 
 		/// <summary>
-		/// Takes over a component that came along with a copied gear item.
+		/// Takes over a component that came along with a copied gear item, or one this mod just added.
 		/// </summary>
 		/// <remarks>
 		/// The game splits a stack by cloning the whole gear item, which clones the <see cref="StackableItem"/> with it.
@@ -190,6 +190,10 @@ namespace StackManager.Utilities
 		/// a dropped bag would still merge with full ones and would never have its amount repaired.
 		/// A copy is also clamped to whole units, because a copy that inherited the total of the stack it came from
 		/// would hold several units worth of flour while calling itself a single bag.
+		/// Idempotent on purpose: the food rule registers the component it just created a few lines earlier in the
+		/// same Awake postfix, and a stack has to leave this method with a track no matter which of the two paths
+		/// registered it. A bag without a track cannot be scaled by the first merge that lands on it, and the recount
+		/// that follows the merge then reads the extra unit as a mistake and erases it.
 		/// </remarks>
 		public static void Adopt(GearItem? gi, string reason)
 		{
@@ -197,12 +201,11 @@ namespace StackManager.Utilities
 
 			StackableItem? stack = gi.m_StackableItem;
 			if (stack == null) return;
-			if (AddedStackables.Contains(stack)) return;
 
 			string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
 			if (!KnowsPrefab(name)) return;
 
-			AddedStackables.Register(stack);
+			if (!AddedStackables.Contains(stack)) AddedStackables.Register(stack);
 
 			// A copy is clamped to what its own unit count can hold, because a copy that inherited the amount of the
 			// stack it came from would hold several units worth of flour while calling itself a single bag.

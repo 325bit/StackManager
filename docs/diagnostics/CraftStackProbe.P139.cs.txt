@@ -1,0 +1,423 @@
+#if P139_DIAG
+using System.Collections;
+using System.Text;
+using Il2CppTLD.Gear;
+
+namespace StackManager.Diagnostics
+{
+	/// <summary>
+	/// Temporary diagnostic build for the "crafting one salt bag turns two stacked bags into one" report.
+	/// </summary>
+	/// <remarks>
+	/// Log-only. Nothing here writes a field, changes control flow, changes a return value or changes timing:
+	/// every hook reads the state and calls <see cref="Snapshot"/>, and the background sampler only compares
+	/// strings. All output carries the [P139] prefix so the whole set can be grepped and removed at once.
+	/// Compiled only when P139_DIAG is defined, so a normal build cannot carry any of it.
+	/// </remarks>
+	internal static class CraftStackProbe
+	{
+		private const string Prefix = "[P139]";
+		private const string Watched = "GEAR_SaltBag";
+		private const float SampleSeconds = 0.15f;
+
+		private static readonly FieldInfo? s_TracksField =
+			typeof(StackContentSync).GetField("s_Tracks", BindingFlags.NonPublic | BindingFlags.Static);
+
+		private static float s_NextSample;
+		private static string s_Last = string.Empty;
+		private static bool s_Announced;
+
+		/// <summary>Samples the watched stack every few frames and reports every change, including native writes.</summary>
+		internal static void Tick()
+		{
+			if (!DebugLog.Enabled) return;
+			if (GameManager.IsMainMenuActive()) return;
+			if (Time.unscaledTime < s_NextSample) return;
+
+			s_NextSample = Time.unscaledTime + SampleSeconds;
+
+			string now = Signature();
+
+			if (!s_Announced)
+			{
+				s_Announced = true;
+				s_Last = now;
+
+				DebugLog.Write($"{Prefix} PROBE READY target={Watched} build=diagnostic behaviour=unchanged");
+				Snapshot("probe.ready");
+				return;
+			}
+
+			if (string.Equals(now, s_Last, StringComparison.Ordinal)) return;
+
+			DebugLog.Write($"{Prefix} DIFF old={s_Last} new={now}");
+			s_Last = now;
+			Snapshot("diff");
+		}
+
+		/// <summary>Prints every watched item in the player inventory, plus the ingredient that pays for the recipe.</summary>
+		internal static void Snapshot(string tag)
+		{
+			if (!DebugLog.Enabled) return;
+
+			try
+			{
+				SnapshotCore(tag);
+			}
+			catch (Exception e)
+			{
+				DebugLog.Write($"{Prefix} SNAP tag={tag} failed err={e.Message}");
+			}
+		}
+
+		private static void SnapshotCore(string tag)
+		{
+			Inventory? inventory = GameManager.GetInventoryComponent();
+			Il2CppSystem.Collections.Generic.List<GearItemObject>? items = inventory?.m_Items;
+
+			StringBuilder line = new();
+			line.Append($"{Prefix} SNAP tag={tag} ");
+
+			int count = 0;
+			int totalUnits = 0;
+			float totalKg = 0f;
+			int cashUnits = 0;
+
+			if (items != null)
+			{
+				for (int i = 0; i < items.Count; i++)
+				{
+					GearItem? gi = items[i]?.m_GearItem;
+					if (gi == null) continue;
+
+					string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
+
+					if (string.Equals(name, "GEAR_CashBundle", StringComparison.OrdinalIgnoreCase))
+					{
+						cashUnits += gi.m_StackableItem?.m_Units ?? 1;
+					}
+
+					if (!string.Equals(name, Watched, StringComparison.OrdinalIgnoreCase)) continue;
+
+					count++;
+					line.Append(' ').Append(Describe(gi));
+
+					int units = gi.m_StackableItem?.m_Units ?? 1;
+					totalUnits += units;
+					totalKg += PowderKg(gi);
+				}
+			}
+
+			line.Append($" n={count} totalU={totalUnits} totalKG={totalKg:F3} cash={cashUnits}");
+
+			DebugLog.Write(line.ToString());
+		}
+
+		/// <summary>One compact token per watched instance, also used as the change signature.</summary>
+		private static string Describe(GearItem gi)
+		{
+			int units = gi.m_StackableItem?.m_Units ?? 1;
+			float powder = PowderKg(gi);
+			float limit = gi.m_PowderItem == null
+				? -1f
+				: StackContentSync.ToKilograms(gi.m_PowderItem.m_WeightLimit);
+			float weight = StackContentSync.ToKilograms(gi.GetItemWeightKG(false));
+			int id = gi.m_InstanceID;
+			int stackId = gi.m_StackableItem?.GetInstanceID() ?? 0;
+
+			return $"[id={id} sid={stackId} u={units} powder={powder:F3} limit={limit:F3} w={weight:F3} "
+				+ $"inbag={Bool(gi.m_InPlayerInventory)} satchel={Bool(gi.m_IsInSatchel)} "
+				+ $"registered={Bool(gi.m_StackableItem != null && AddedStackables.Contains(gi.m_StackableItem))} "
+				+ $"track={TrackOf(stackId)}]";
+		}
+
+		private static string Signature()
+		{
+			try
+			{
+				Inventory? inventory = GameManager.GetInventoryComponent();
+				var items = inventory?.m_Items;
+				if (items == null) return "no-inventory";
+
+				List<string> parts = new();
+
+				for (int i = 0; i < items.Count; i++)
+				{
+					GearItem? gi = items[i]?.m_GearItem;
+					if (gi == null) continue;
+
+					string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
+					if (!string.Equals(name, Watched, StringComparison.OrdinalIgnoreCase)) continue;
+
+					parts.Add($"{gi.m_InstanceID}:{gi.m_StackableItem?.m_Units ?? 1}:{PowderKg(gi):F3}");
+				}
+
+				return parts.Count == 0 ? "none" : string.Join("|", parts);
+			}
+			catch (Exception e)
+			{
+				return $"error:{e.Message}";
+			}
+		}
+
+		private static float PowderKg(GearItem gi)
+		{
+			return gi.m_PowderItem == null ? 0f : StackContentSync.ToKilograms(gi.m_PowderItem.m_Weight);
+		}
+
+		/// <summary>Reads the repair bookkeeping of a stack without changing it.</summary>
+		private static string TrackOf(int stackId)
+		{
+			try
+			{
+				IDictionary? tracks = s_TracksField?.GetValue(null) as IDictionary;
+				object? track = tracks == null ? null : tracks[stackId];
+				if (track == null) return "none";
+
+				Type type = track.GetType();
+				object? units = ReadMember(type, track, "Units");
+				object? content = ReadMember(type, track, "Content");
+
+				if (units is not int u || content is not float c) return "?";
+
+				return $"{u}/{c:F3}";
+			}
+			catch
+			{
+				return "?";
+			}
+		}
+
+		private static object? ReadMember(Type type, object instance, string name)
+		{
+			const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+			return type.GetField(name, flags)?.GetValue(instance)
+				?? type.GetProperty(name, flags)?.GetValue(instance);
+		}
+
+		private static string Bool(bool value) => value ? "1" : "0";
+
+		/// <summary>Short identity of any gear item, safe to call on a prefab or a destroyed object.</summary>
+		internal static string Id(GearItem? gi)
+		{
+			if (gi == null) return "null";
+
+			try
+			{
+				string name = CommonUtilities.NormalizeName(gi.name) ?? "?";
+
+				return $"{name} id={gi.m_InstanceID} u={gi.m_StackableItem?.m_Units ?? 1} "
+					+ $"powder={PowderKg(gi):F3} inbag={Bool(gi.m_InPlayerInventory)}";
+			}
+			catch
+			{
+				return "unreadable";
+			}
+		}
+	}
+
+	/// <summary>Recipe consumption boundary: did the stack survive the cost phase unchanged?</summary>
+	[HarmonyPatch(typeof(CraftingOperation), "ConsumeMaterialsUsedForCrafting")]
+	internal static class P139_CraftConsume
+	{
+		public static void Prefix() => CraftStackProbe.Snapshot("craft.consume.begin");
+		public static void Postfix() => CraftStackProbe.Snapshot("craft.consume.end");
+	}
+
+	/// <summary>Success boundary: the game hands out the crafted result from inside this call.</summary>
+	[HarmonyPatch(typeof(CraftingOperation), "HandleSuccess")]
+	internal static class P139_CraftSuccess
+	{
+		public static void Prefix() => CraftStackProbe.Snapshot("craft.success.begin");
+		public static void Postfix() => CraftStackProbe.Snapshot("craft.success.end");
+	}
+
+	/// <summary>Result delivery boundary, before anything is added to the inventory.</summary>
+	[HarmonyPatch(typeof(PlayerManager), "InstantiateCraftedItemInPlayerInventory")]
+	internal static class P139_CraftDeliver
+	{
+		public static void Prefix() => CraftStackProbe.Snapshot("craft.deliver.begin");
+		public static void Postfix() => CraftStackProbe.Snapshot("craft.deliver.end");
+	}
+
+	/// <summary>The four argument overload is the one that instantiates a gear item copy into the bag.</summary>
+	[HarmonyPatch]
+	internal static class P139_InstantiateItem
+	{
+		public static MethodBase TargetMethod()
+		{
+			MethodInfo? target = typeof(PlayerManager).GetMethods()
+				.FirstOrDefault(method => method.Name == nameof(PlayerManager.InstantiateItemInPlayerInventory)
+					&& method.GetParameters().Length == 4
+					&& method.GetParameters()[0].ParameterType == typeof(GearItem));
+
+			return target ?? throw new BadMemeException(
+				"P139: InstantiateItemInPlayerInventory(GearItem, int, float, flags) not found.");
+		}
+
+		public static void Prefix(GearItem __0, int __1)
+		{
+			DebugLog.Write($"[P139] INSTANTIATE begin src={CraftStackProbe.Id(__0)} requestedUnits={__1}");
+			CraftStackProbe.Snapshot("instantiate.begin");
+		}
+
+		public static void Postfix(GearItem __result)
+		{
+			DebugLog.Write($"[P139] INSTANTIATE end result={CraftStackProbe.Id(__result)}");
+			CraftStackProbe.Snapshot("instantiate.end");
+		}
+	}
+
+	/// <summary>The four argument merge is the one the game uses when it hands out a crafted prefab.</summary>
+	[HarmonyPatch(typeof(PlayerManager))]
+	[HarmonyPatch(nameof(PlayerManager.TryAddToExistingStackable))]
+	[HarmonyPatch([typeof(GearItem), typeof(float), typeof(int), typeof(GearItem)],
+		[ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out])]
+	internal static class P139_Merge4
+	{
+		public static void Prefix(GearItem __0, int __2)
+		{
+			DebugLog.Write($"[P139] MERGE4 begin add={CraftStackProbe.Id(__0)} numUnits={__2}");
+		}
+
+		public static void Postfix(ref GearItem? __3, bool __result)
+		{
+			DebugLog.Write($"[P139] MERGE4 end result={__result} target={CraftStackProbe.Id(__3)}");
+			CraftStackProbe.Snapshot("merge4.end");
+		}
+	}
+
+	/// <summary>The other merge overload, kept so an unpatched vanilla path cannot hide the result.</summary>
+	[HarmonyPatch(typeof(PlayerManager))]
+	[HarmonyPatch(nameof(PlayerManager.TryAddToExistingStackable))]
+	[HarmonyPatch([typeof(GearItem), typeof(int), typeof(GearItem)],
+		[ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out])]
+	internal static class P139_Merge2
+	{
+		public static void Prefix(GearItem __0, int __1)
+		{
+			DebugLog.Write($"[P139] MERGE2 begin add={CraftStackProbe.Id(__0)} numUnits={__1}");
+		}
+
+		public static void Postfix(ref GearItem? __2, bool __result)
+		{
+			DebugLog.Write($"[P139] MERGE2 end result={__result} target={CraftStackProbe.Id(__2)}");
+			CraftStackProbe.Snapshot("merge2.end");
+		}
+	}
+
+	/// <summary>Every explicit add to the bag, including the fallback when a merge is refused.</summary>
+	[HarmonyPatch(typeof(Inventory), nameof(Inventory.AddGear), [typeof(GearItem), typeof(bool)])]
+	internal static class P139_AddGear
+	{
+		public static void Prefix(GearItem __0)
+		{
+			DebugLog.Write($"[P139] ADDGEAR begin item={CraftStackProbe.Id(__0)}");
+			CraftStackProbe.Snapshot("addgear.begin");
+		}
+
+		public static void Postfix(GearItem __0)
+		{
+			CraftStackProbe.Snapshot("addgear.end");
+		}
+	}
+
+	/// <summary>Both removal overloads: the only way the old stack can disappear without a unit count write.</summary>
+	[HarmonyPatch(typeof(Inventory), "RemoveGear", [typeof(GameObject)])]
+	internal static class P139_RemoveGear1
+	{
+		public static void Prefix(GameObject __0)
+		{
+			GearItem? gi = __0?.GetComponent<GearItem>();
+			DebugLog.Write($"[P139] REMOVEGEAR(1) begin item={CraftStackProbe.Id(gi)}");
+			CraftStackProbe.Snapshot("removegear1.begin");
+		}
+	}
+
+	[HarmonyPatch(typeof(Inventory), "RemoveGear", [typeof(GameObject), typeof(bool)])]
+	internal static class P139_RemoveGear2
+	{
+		public static void Prefix(GameObject __0, bool __1)
+		{
+			GearItem? gi = __0?.GetComponent<GearItem>();
+			DebugLog.Write($"[P139] REMOVEGEAR(2) begin item={CraftStackProbe.Id(gi)} destroy={__1}");
+			CraftStackProbe.Snapshot("removegear2.begin");
+		}
+	}
+
+	/// <summary>Removes whole units from a stack, the path a recipe uses for a count based cost.</summary>
+	[HarmonyPatch(typeof(Inventory), nameof(Inventory.RemoveUnits), [typeof(GearItem), typeof(int)])]
+	internal static class P139_RemoveUnits
+	{
+		public static void Prefix(GearItem __0, int __1)
+		{
+			DebugLog.Write($"[P139] REMOVEUNITS begin item={CraftStackProbe.Id(__0)} count={__1}");
+		}
+
+		public static void Postfix(GearItem __0, int __1)
+		{
+			DebugLog.Write($"[P139] REMOVEUNITS end item={CraftStackProbe.Id(__0)} count={__1}");
+			CraftStackProbe.Snapshot("removeunits.end");
+		}
+	}
+
+	/// <summary>Every managed write to the unit count. A change without this line came from native code.</summary>
+	[HarmonyPatch]
+	internal static class P139_SetUnits
+	{
+		public static MethodBase TargetMethod()
+		{
+			MethodInfo? setter = typeof(StackableItem).GetProperty("m_Units")?.GetSetMethod();
+
+			return setter ?? throw new BadMemeException("P139: StackableItem.m_Units setter not found.");
+		}
+
+		public static void Prefix(StackableItem __instance, int __0)
+		{
+			try
+			{
+				GearItem? gi = __instance.GetComponent<GearItem>();
+				if (gi == null) return;
+
+				string name = CommonUtilities.NormalizeName(gi.name) ?? string.Empty;
+				if (!string.Equals(name, "GEAR_SaltBag", StringComparison.OrdinalIgnoreCase)) return;
+
+				DebugLog.Write($"[P139] SETUNITS sid={__instance.GetInstanceID()} old={__instance.m_Units} new={__0} "
+					+ $"powder={(gi.m_PowderItem == null ? -1f : StackContentSync.ToKilograms(gi.m_PowderItem.m_Weight)):F3}");
+			}
+			catch
+			{
+				// A probe must never change the outcome of the call it watches
+			}
+		}
+	}
+
+	/// <summary>What the player actually sees, so a display-only fault can be told from a data fault.</summary>
+	[HarmonyPatch(typeof(InventoryGridItem), nameof(InventoryGridItem.Refresh), [typeof(GearItem), typeof(int)])]
+	internal static class P139_GridRefresh
+	{
+		public static void Postfix(InventoryGridItem __instance, GearItem __0)
+		{
+			try
+			{
+				if (__0 == null) return;
+
+				string name = CommonUtilities.NormalizeName(__0.name) ?? string.Empty;
+				if (!string.Equals(name, "GEAR_SaltBag", StringComparison.OrdinalIgnoreCase)) return;
+
+				string stack = __instance.m_StackLabel?.text ?? string.Empty;
+				string unit = __instance.m_UnitLabel?.text ?? string.Empty;
+				string liquid = __instance.m_LiquidLabel?.text ?? string.Empty;
+
+				DebugLog.Write($"[P139] UI data={CraftStackProbe.Id(__0)} stackLabel=\"{stack}\" "
+					+ $"unitLabel=\"{unit}\" liquidLabel=\"{liquid}\"");
+			}
+			catch
+			{
+				// A probe must never change the outcome of the call it watches
+			}
+		}
+	}
+}
+#endif

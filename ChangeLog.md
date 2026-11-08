@@ -1,3 +1,37 @@
+# Stack Manager v1.3.9
+
+## Fixed
+
+- **Crafting one more salt bag wiped out the whole stack that was already in the bag.**
+  A craft creates its result twice: a temporary item that carries the crafting progress, and the real reward once
+  the craft succeeds. The game destroys the temporary item as soon as the progress completes. A crafted result is
+  built from a prefab, and the game first tries to merge that prefab into a matching stack already in the bag;
+  when the merge succeeds, it returns the *existing stack* as the item it just created. On a stackable bag that
+  made the player's entire stack the temporary object, so finishing the craft destroyed every bag in it and the
+  reward arrived as one fresh bag instead. The temporary item is now kept as a separate short-lived instance,
+  while the real result from the success path still merges normally, so a craft adds one bag to the stack instead
+  of replacing it.
+
+---
+
+# Stack Manager v1.3.8
+
+## Fixed
+
+- **A crafted salt bag sometimes vanished instead of joining the stack, while the materials were still taken.**
+  Every bag this mod makes stackable was meant to leave its first moments with a record of what one unit of it
+  holds. The record was written by the code that takes over copied items, but the food rule had already claimed
+  the component a moment earlier in the same wake-up, and the takeover bowed out on seeing that - so a freshly
+  crafted bag carried no record at all. The first merge that landed on such a bag had nothing to compare
+  against: the game had raised the count by one bag without moving the salt, the repair that would have scaled
+  the salt to the new count never fired, and the check that follows a merge read the extra unit as a mistake
+  and recounted the stack back down. The bag was gone, the cash was gone, and the stack showed nothing for it.
+  Whether a bag was hit depended on a race with the periodic sweep, which is why it only happened sometimes.
+  The takeover no longer bows out: a stack gets its record the moment it is born, and a merge into it now
+  scales the contents the way it always should have.
+
+---
+
 # Stack Manager v1.3.7
 
 ## Fixed

@@ -21,6 +21,18 @@ namespace StackManager.Patches
 			if (GameManager.IsMainMenuActive()) return true;
 			if (gearToAdd == null) return true;
 
+			// A craft creates a temporary item to carry its progress and destroys that item when the craft finishes.
+			// When a prefab merges into an existing stack, the game returns the whole stack as the item it just
+			// created, so the temporary object and the player's stack become the same thing and the whole stack is
+			// destroyed. Keeping the preview as a separate instance costs one short-lived object and leaves the
+			// player's stack intact; the real result is still free to merge from inside the success path.
+			if (CraftDeliveryGuard.IsPreviewDelivery)
+			{
+				existingGearItem = null;
+				__result = false;
+				return false;
+			}
+
 			// A partially eaten unit has to stay on its own, see FoodStackingRules for why
 			if (FoodStackingRules.KeepsOutOfStack(gearToAdd))
 			{
