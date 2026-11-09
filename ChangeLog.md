@@ -1,3 +1,18 @@
+# Stack Manager v1.3.10
+
+## Fixed
+
+- **Splitting a stack of fish made the fish lose weight.** Taking 13 fish out of a 25-fish stack that weighed
+  105 kg left 12 fish at 50 kg in the box and 13 at 46 kg in the bag: about 9 kg had disappeared. Splitting does
+  not clone the stack - the game loads the prefab and instantiates that, then writes the new unit count onto the
+  copy. A caught fish carries a weight chosen at the moment it was caught, together with calories derived from
+  that weight, and both were replaced by the prefab's fixed values (3.547 kg / 1064 cal instead of 4.211 kg /
+  1263 cal). Food with a fixed weight never showed this because its prefab and instance values are the same, and
+  vanilla fish cannot stack at all. Copies now inherit the original's weight and calories on both split paths,
+  and their bookkeeping is rebuilt afterwards so later merges scale against the right unit size.
+
+---
+
 # Stack Manager v1.3.9
 
 ## Fixed

@@ -101,4 +101,4 @@ GEAR_SomeLiquid
 
 ## Version
 
-1.3.9 — see [ChangeLog.md](ChangeLog.md).
+1.3.10 — see [ChangeLog.md](ChangeLog.md).

@@ -1,0 +1,126 @@
+import io, sys
+
+p = r'D:/code/Csharp/The_Long_dark/StackManager/VisualStudio/Utilities/StackContentSync.cs'
+raw = io.open(p, 'r', encoding='utf-8-sig', newline='').read()
+nl = '\r\n' if '\r\n' in raw else '\n'
+
+W = 'StackManager.Diagnostics.FishWeightProbe.Writer'
+
+
+def block(site, phase):
+    return (
+        '#if P140_DIAG' + nl +
+        '\t\t\t' + W + f'("{site}", gi, "{phase}");' + nl +
+        '#endif' + nl
+    )
+
+
+def wrap(site, stmt, indent='\t\t\t'):
+    lines = stmt.split(nl)
+    body = nl.join(lines)
+    return block(site, 'before') + body + nl + block(site, 'after')
+
+
+pairs = []
+
+# 1. RepairFoodWeight
+old = '\t\t\tgi.WeightKG = FromKilograms(whole);' + nl + nl + '\t\t\tstring name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;'
+new = block('RepairFoodWeight', 'before') + '\t\t\tgi.WeightKG = FromKilograms(whole);' + nl + block('RepairFoodWeight', 'after') + nl + '\t\t\tstring name = CommonUtilities.NormalizeName(gi.name) ?? gi.name ?? string.Empty;'
+pairs.append(('RepairFoodWeight', old, new))
+
+# 2. RestoreContainerWeight
+old = '\t\t\tgi.WeightKG = gi.m_GearItemData.BaseWeightKG;'
+new = block('RestoreContainerWeight', 'before') + old + nl + block('RestoreContainerWeight', 'after').rstrip(nl)
+pairs.append(('RestoreContainerWeight', old, new))
+
+# 3. SetWholeUnits (food calories + trailing weight)
+old = (
+    '\t\t\t\tcase ContentKind.Food:' + nl +
+    '\t\t\t\t\tif (gi.m_FoodItem != null) gi.m_FoodItem.m_CaloriesRemaining = amount;' + nl +
+    '\t\t\t\t\tbreak;' + nl +
+    '\t\t\t}' + nl + nl +
+    '\t\t\t// A plain gear item states the weight of one unit, and the game multiplies it by the unit count itself' + nl +
+    '\t\t\tgi.WeightKG = FromKilograms(baseline.UnitWeightKg);'
+)
+new = (
+    '\t\t\t\tcase ContentKind.Food:' + nl +
+    '\t\t\t\t\t' + '#if P140_DIAG' + nl +
+    '\t\t\t\t\t' + W + '("SetWholeUnits.calories", gi, "before");' + nl +
+    '\t\t\t\t\t' + '#endif' + nl +
+    '\t\t\t\t\tif (gi.m_FoodItem != null) gi.m_FoodItem.m_CaloriesRemaining = amount;' + nl +
+    '\t\t\t\t\t' + '#if P140_DIAG' + nl +
+    '\t\t\t\t\t' + W + '("SetWholeUnits.calories", gi, "after");' + nl +
+    '\t\t\t\t\t' + '#endif' + nl +
+    '\t\t\t\t\tbreak;' + nl +
+    '\t\t\t}' + nl + nl +
+    '\t\t\t// A plain gear item states the weight of one unit, and the game multiplies it by the unit count itself' + nl +
+    '#if P140_DIAG' + nl +
+    '\t\t\t' + W + '("SetWholeUnits.weight", gi, "before");' + nl +
+    '#endif' + nl +
+    '\t\t\tgi.WeightKG = FromKilograms(baseline.UnitWeightKg);' + nl +
+    '#if P140_DIAG' + nl +
+    '\t\t\t' + W + '("SetWholeUnits.weight", gi, "after");' + nl +
+    '#endif'
+)
+pairs.append(('SetWholeUnits', old, new))
+
+# 4. ScaleTo trailing weight
+old = (
+    '\t\t\t// A food item states the weight of one whole unit; a plain one writes it the same way' + nl +
+    '\t\t\tgi.WeightKG = FromKilograms(baseline.UnitWeightKg);'
+)
+new = (
+    '\t\t\t// A food item states the weight of one whole unit; a plain one writes it the same way' + nl +
+    '#if P140_DIAG' + nl +
+    '\t\t\t' + W + '("ScaleTo.weight", gi, "before");' + nl +
+    '#endif' + nl +
+    '\t\t\tgi.WeightKG = FromKilograms(baseline.UnitWeightKg);' + nl +
+    '#if P140_DIAG' + nl +
+    '\t\t\t' + W + '("ScaleTo.weight", gi, "after");' + nl +
+    '#endif'
+)
+pairs.append(('ScaleTo', old, new))
+
+# 5. SetPartialUnit food branch
+old = (
+    '\t\t\t\tcase ContentKind.Food:' + nl +
+    '\t\t\t\t\tif (gi.m_FoodItem != null) gi.m_FoodItem.m_CaloriesRemaining = amount;' + nl + nl +
+    '\t\t\t\t\t// A food item always carries the weight of one whole unit: the game scales it by the share of' + nl +
+    '\t\t\t\t\t// the calories that are left. Writing that share in here as well scales it twice, which is how' + nl +
+    '\t\t\t\t\t// a pie that should have left 0.5 kg of meat left 0.25 kg instead.' + nl +
+    '\t\t\t\t\tgi.WeightKG = FromKilograms(baseline.UnitWeightKg);' + nl +
+    '\t\t\t\t\treturn;'
+)
+new = (
+    '\t\t\t\tcase ContentKind.Food:' + nl +
+    '\t\t\t\t\t' + '#if P140_DIAG' + nl +
+    '\t\t\t\t\t' + W + '("SetPartialUnit.calories", gi, "before");' + nl +
+    '\t\t\t\t\t' + '#endif' + nl +
+    '\t\t\t\t\tif (gi.m_FoodItem != null) gi.m_FoodItem.m_CaloriesRemaining = amount;' + nl +
+    '\t\t\t\t\t' + '#if P140_DIAG' + nl +
+    '\t\t\t\t\t' + W + '("SetPartialUnit.calories", gi, "after");' + nl +
+    '\t\t\t\t\t' + '#endif' + nl + nl +
+    '\t\t\t\t\t// A food item always carries the weight of one whole unit: the game scales it by the share of' + nl +
+    '\t\t\t\t\t// the calories that are left. Writing that share in here as well scales it twice, which is how' + nl +
+    '\t\t\t\t\t// a pie that should have left 0.5 kg of meat left 0.25 kg instead.' + nl +
+    '\t\t\t\t\t' + '#if P140_DIAG' + nl +
+    '\t\t\t\t\t' + W + '("SetPartialUnit.weight", gi, "before");' + nl +
+    '\t\t\t\t\t' + '#endif' + nl +
+    '\t\t\t\t\tgi.WeightKG = FromKilograms(baseline.UnitWeightKg);' + nl +
+    '\t\t\t\t\t' + '#if P140_DIAG' + nl +
+    '\t\t\t\t\t' + W + '("SetPartialUnit.weight", gi, "after");' + nl +
+    '\t\t\t\t\t' + '#endif' + nl +
+    '\t\t\t\t\treturn;'
+)
+pairs.append(('SetPartialUnit', old, new))
+
+for name, old, new in pairs:
+    n = raw.count(old)
+    if n != 1:
+        print(f'FAIL {name}: anchor count={n}')
+        sys.exit(1)
+    raw = raw.replace(old, new, 1)
+    print(f'ok {name}')
+
+io.open(p, 'w', encoding='utf-8', newline='').write(raw)
+print('written, P140_DIAG blocks =', raw.count('#if P140_DIAG'))

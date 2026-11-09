@@ -1,0 +1,555 @@
+#if P140_DIAG
+using System.Text;
+using Il2CppTLD.Gear;
+using Il2CppTLD.Trader;
+using StackManager.Utilities;
+using StackManager.Utilities.Exceptions;
+
+namespace StackManager.Diagnostics
+{
+	/// <summary>
+	/// Temporary diagnostic build for the "placing all stacked fish into the trader box changes 34 kg into 19 kg" report.
+	/// </summary>
+	/// <remarks>
+	/// Log-only. Nothing here writes a field, changes control flow, changes a return value or changes timing:
+	/// every hook reads state and prints it, and the sampler only compares strings. All output carries the [P140]
+	/// prefix so the whole set can be grepped and removed at once. Compiled only when P140_DIAG is defined.
+	/// Watched items are stacked food (m_Units >= 2 with a FoodItem), which covers the fish without hardcoding a name.
+	/// </remarks>
+	internal static class FishWeightProbe
+	{
+		private const string Prefix = "[P140]";
+		private const float SampleSeconds = 0.15f;
+		private const int MaxItems = 60;
+
+		private static readonly FieldInfo? s_TracksField =
+			typeof(StackContentSync).GetField("s_Tracks", BindingFlags.NonPublic | BindingFlags.Static);
+
+		private static float s_NextSample;
+		private static bool s_Announced;
+		private static Dictionary<int, string> s_Last = new();
+		private static ExchangeBox? s_Box;
+
+		/// <summary>Remembers the exchange box so the sampler can see items that are no longer in the bag.</summary>
+		internal static void Remember(ExchangeBox? box)
+		{
+			if (box != null) s_Box = box;
+		}
+
+		/// <summary>Read-only change detector; catches native writes that no managed hook reports.</summary>
+		internal static void Tick()
+		{
+			if (!DebugLog.Enabled) return;
+			if (GameManager.IsMainMenuActive()) return;
+			if (Time.unscaledTime < s_NextSample) return;
+
+			s_NextSample = Time.unscaledTime + SampleSeconds;
+
+			Dictionary<int, string> now;
+
+			try
+			{
+				now = Collect();
+			}
+			catch (Exception e)
+			{
+				DebugLog.Write($"{Prefix} DIFF failed err={e.Message}");
+				return;
+			}
+
+			if (!s_Announced)
+			{
+				s_Announced = true;
+				s_Last = now;
+
+				DebugLog.Write($"{Prefix} PROBE READY watched=stacked-food behaviour=unchanged");
+				Snapshot("probe.ready");
+				return;
+			}
+
+			bool changed = false;
+
+			foreach (KeyValuePair<int, string> old in s_Last)
+			{
+				if (now.ContainsKey(old.Key)) continue;
+
+				DebugLog.Write($"{Prefix} DIFF GONE id={old.Key} old={old.Value}");
+				changed = true;
+			}
+
+			foreach (KeyValuePair<int, string> item in now)
+			{
+				if (!s_Last.TryGetValue(item.Key, out string? previous))
+				{
+					DebugLog.Write($"{Prefix} DIFF NEW id={item.Key} new={item.Value}");
+					changed = true;
+				}
+				else if (!string.Equals(previous, item.Value, StringComparison.Ordinal))
+				{
+					DebugLog.Write($"{Prefix} DIFF CHG id={item.Key} old={previous} new={item.Value}");
+					changed = true;
+				}
+			}
+
+			s_Last = now;
+
+			if (changed) Snapshot("diff");
+		}
+
+		/// <summary>Prints every watched stack in the bag and in the exchange box at once.</summary>
+		internal static void Snapshot(string tag)
+		{
+			if (!DebugLog.Enabled) return;
+
+			try
+			{
+				Dictionary<int, string> now = Collect();
+				StringBuilder line = new();
+				line.Append($"{Prefix} SNAP tag={tag} n={now.Count}");
+
+				foreach (KeyValuePair<int, string> item in now.Take(MaxItems))
+				{
+					line.Append(' ').Append(item.Value);
+				}
+
+				DebugLog.Write(line.ToString());
+			}
+			catch (Exception e)
+			{
+				DebugLog.Write($"{Prefix} SNAP tag={tag} failed err={e.Message}");
+			}
+		}
+
+		/// <summary>Reports a field write from inside StackContentSync without changing anything.</summary>
+		internal static void Writer(string site, GearItem? gi, string phase)
+		{
+			if (!DebugLog.Enabled) return;
+			if (gi == null || !IsWatched(gi)) return;
+
+			try
+			{
+				DebugLog.Write($"{Prefix} WRITER site={site} phase={phase} {Describe(gi)}");
+			}
+			catch (Exception e)
+			{
+				DebugLog.Write($"{Prefix} WRITER site={site} phase={phase} failed err={e.Message}");
+			}
+		}
+
+		private static bool IsWatched(GearItem gi)
+		{
+			try
+			{
+				return gi.m_FoodItem != null
+					&& gi.m_StackableItem != null
+					&& gi.m_StackableItem.m_Units >= 2;
+			}
+			catch
+			{
+				return false;
+			}
+		}
+
+		private static Dictionary<int, string> Collect()
+		{
+			Dictionary<int, string> result = new();
+
+			Inventory? inventory = GameManager.GetInventoryComponent();
+			var bag = inventory?.m_Items;
+
+			if (bag != null)
+			{
+				for (int i = 0; i < bag.Count; i++)
+				{
+					GearItem? gi = bag[i]?.m_GearItem;
+					if (gi == null || !IsWatched(gi)) continue;
+
+					result[gi.m_InstanceID] = Describe(gi, "bag");
+				}
+			}
+
+			ExchangeBox? box = s_Box;
+
+			if (box != null)
+			{
+				try
+				{
+					int exchanges = box.GetExchangeDataCount();
+
+					for (int e = 0; e < exchanges; e++)
+					{
+						var exchanged = box.GetExchangedItems(e);
+						if (exchanged == null) continue;
+
+						for (int i = 0; i < exchanged.Count; i++)
+						{
+							GearItem? gi = exchanged[i]?.m_GearItem;
+							if (gi == null || !IsWatched(gi)) continue;
+
+							result[gi.m_InstanceID] = Describe(gi, $"box{e}");
+						}
+					}
+				}
+				catch
+				{
+					// A probe must never change the outcome of the frame it watches
+				}
+			}
+
+			return result;
+		}
+
+		/// <summary>One compact token per stack; also used as the change signature.</summary>
+		private static string Describe(GearItem gi, string? location = null)
+		{
+			int units = gi.m_StackableItem?.m_Units ?? 1;
+			int stackId = gi.m_StackableItem?.GetInstanceID() ?? 0;
+
+			float own = StackContentSync.ToKilograms(gi.WeightKG);
+			float single = Safe(() => StackContentSync.ToKilograms(gi.GetSingleItemWeightKG(false)));
+			float total = Safe(() => StackContentSync.ToKilograms(gi.GetItemWeightKG(false)));
+			float baseWeight = Safe(() => gi.m_GearItemData == null
+				? -1f
+				: StackContentSync.ToKilograms(gi.m_GearItemData.BaseWeightKG));
+
+			FoodItem? food = gi.m_FoodItem;
+			float calRem = food?.m_CaloriesRemaining ?? -1f;
+			float calTot = food?.m_CaloriesTotal ?? -1f;
+			float ratio = calTot > 0f ? calRem / calTot : -1f;
+
+			string name = CommonUtilities.NormalizeName(gi.name) ?? "?";
+			string loc = location ?? (gi.m_InPlayerInventory ? "bag" : gi.m_IsInSatchel ? "satchel" : "world");
+
+			bool registered = gi.m_StackableItem != null && AddedStackables.Contains(gi.m_StackableItem);
+
+			return $"[{name} id={gi.m_InstanceID} sid={stackId} u={units} own={own:F3} single={single:F3} "
+				+ $"item={total:F3} base={baseWeight:F3} calR={calRem:F1} calT={calTot:F1} ratio={ratio:F3} "
+				+ $"loc={loc} reg={Bool(registered)} track={TrackOf(stackId)}]";
+		}
+
+		private static float Safe(Func<float> read)
+		{
+			try
+			{
+				return read();
+			}
+			catch
+			{
+				return -2f;
+			}
+		}
+
+		internal static string Id(GearItem? gi)
+		{
+			if (gi == null) return "null";
+
+			try
+			{
+				return Describe(gi);
+			}
+			catch
+			{
+				return "unreadable";
+			}
+		}
+
+		private static string TrackOf(int stackId)
+		{
+			try
+			{
+				System.Collections.IDictionary? tracks = s_TracksField?.GetValue(null) as System.Collections.IDictionary;
+				object? track = tracks == null ? null : tracks[stackId];
+				if (track == null) return "none";
+
+				Type type = track.GetType();
+				object? units = ReadMember(type, track, "Units");
+				object? content = ReadMember(type, track, "Content");
+
+				return units is int u && content is float c ? $"{u}/{c:F1}" : "?";
+			}
+			catch
+			{
+				return "?";
+			}
+		}
+
+		private static object? ReadMember(Type type, object instance, string name)
+		{
+			const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+			return type.GetField(name, flags)?.GetValue(instance)
+				?? type.GetProperty(name, flags)?.GetValue(instance);
+		}
+
+		private static string Bool(bool value) => value ? "1" : "0";
+	}
+
+	/// <summary>The button that starts a placement; tells us which transfer path the game chose.</summary>
+	[HarmonyPatch(typeof(Panel_ExchangeBox), "MoveItem")]
+	internal static class P140_MoveItem
+	{
+		public static void Prefix() => FishWeightProbe.Snapshot("move.begin");
+		public static void Postfix() => FishWeightProbe.Snapshot("move.end");
+	}
+
+	/// <summary>Partial placement (one unit at a time) takes this branch and clones the stack.</summary>
+	[HarmonyPatch(typeof(Panel_ExchangeBox), "HandleOnStackableTransfer", [typeof(int)])]
+	internal static class P140_StackTransfer
+	{
+		public static void Prefix(int __0)
+		{
+			DebugLog.Write($"[P140] STACKTRANSFER begin units={__0}");
+			FishWeightProbe.Snapshot("stacktransfer.begin");
+		}
+
+		public static void Postfix(int __0)
+		{
+			DebugLog.Write($"[P140] STACKTRANSFER end units={__0}");
+			FishWeightProbe.Snapshot("stacktransfer.end");
+		}
+	}
+
+	/// <summary>"Place all" takes this branch: units equals the stack count, so the whole object is moved.</summary>
+	[HarmonyPatch(typeof(Panel_ExchangeBox), "HandleOnItemTransfer")]
+	internal static class P140_ItemTransfer
+	{
+		public static void Prefix()
+		{
+			DebugLog.Write("[P140] ITEMTRANSFER begin");
+			FishWeightProbe.Snapshot("itemtransfer.begin");
+		}
+
+		public static void Postfix()
+		{
+			DebugLog.Write("[P140] ITEMTRANSFER end");
+			FishWeightProbe.Snapshot("itemtransfer.end");
+		}
+	}
+
+	/// <summary>The four argument merge is the one the exchange box uses for stacked items.</summary>
+	[HarmonyPatch(typeof(ExchangeBox))]
+	[HarmonyPatch(nameof(ExchangeBox.TryAddToExistingStackable))]
+	[HarmonyPatch([typeof(int), typeof(GearItem), typeof(int), typeof(GearItem)],
+		[ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out])]
+	internal static class P140_Merge4
+	{
+		public static void Prefix(ExchangeBox __instance, int __0, GearItem __1, int __2)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] MERGE4 begin exchange={__0} units={__2} add={FishWeightProbe.Id(__1)}");
+		}
+
+		public static void Postfix(ExchangeBox __instance, ref GearItem? __3, bool __result)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] MERGE4 end result={__result} target={FishWeightProbe.Id(__3)}");
+			FishWeightProbe.Snapshot("merge4.end");
+		}
+	}
+
+	[HarmonyPatch(typeof(ExchangeBox))]
+	[HarmonyPatch(nameof(ExchangeBox.TryAddToExistingStackable))]
+	[HarmonyPatch([typeof(int), typeof(GearItem), typeof(GearItem)],
+		[ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out])]
+	internal static class P140_Merge3
+	{
+		public static void Prefix(ExchangeBox __instance, int __0, GearItem __1)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] MERGE3 begin exchange={__0} add={FishWeightProbe.Id(__1)}");
+		}
+
+		public static void Postfix(ExchangeBox __instance, ref GearItem? __2, bool __result)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] MERGE3 end result={__result} target={FishWeightProbe.Id(__2)}");
+			FishWeightProbe.Snapshot("merge3.end");
+		}
+	}
+
+	[HarmonyPatch(typeof(ExchangeBox), nameof(ExchangeBox.AddItem), [typeof(int), typeof(GearItem)])]
+	internal static class P140_AddItem
+	{
+		public static void Prefix(ExchangeBox __instance, int __0, GearItem __1)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] ADDITEM begin exchange={__0} item={FishWeightProbe.Id(__1)}");
+		}
+
+		public static void Postfix(ExchangeBox __instance, int __0, GearItem __1)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] ADDITEM end exchange={__0} item={FishWeightProbe.Id(__1)}");
+			FishWeightProbe.Snapshot("additem.end");
+		}
+	}
+
+	[HarmonyPatch(typeof(ExchangeBox), nameof(ExchangeBox.RemoveItem), [typeof(int), typeof(GearItem)])]
+	internal static class P140_RemoveItem
+	{
+		public static void Prefix(ExchangeBox __instance, int __0, GearItem __1)
+		{
+			FishWeightProbe.Remember(__instance);
+			DebugLog.Write($"[P140] REMOVEITEM begin exchange={__0} item={FishWeightProbe.Id(__1)}");
+		}
+
+		public static void Postfix(ExchangeBox __instance, int __0, GearItem __1)
+		{
+			DebugLog.Write($"[P140] REMOVEITEM end exchange={__0} item={FishWeightProbe.Id(__1)}");
+			FishWeightProbe.Snapshot("removeitem.end");
+		}
+	}
+
+	[HarmonyPatch(typeof(ExchangeBox), nameof(ExchangeBox.GetMissingAmount), [typeof(int), typeof(GearItem)])]
+	internal static class P140_Missing
+	{
+		public static void Postfix(int __0, GearItem __1, int __result)
+		{
+			DebugLog.Write($"[P140] MISSING exchange={__0} need={__result} item={FishWeightProbe.Id(__1)}");
+		}
+	}
+
+	[HarmonyPatch(typeof(ExchangeBox), "InitializeExchangeBox")]
+	internal static class P140_BoxInit
+	{
+		public static void Postfix(ExchangeBox __instance) => FishWeightProbe.Remember(__instance);
+	}
+
+	/// <summary>Partial placement clones the stack; a clone made from the prefab would carry prefab weight.</summary>
+	[HarmonyPatch(typeof(GearItem), nameof(GearItem.InstantiateStackable), [typeof(int)])]
+	internal static class P140_InstantiateStackable
+	{
+		public static void Prefix(GearItem __instance, int __0)
+		{
+			DebugLog.Write($"[P140] INSTANTSTACK begin units={__0} src={FishWeightProbe.Id(__instance)}");
+		}
+
+		public static void Postfix(GearItem __instance, int __0, GearItem __result)
+		{
+			DebugLog.Write($"[P140] INSTANTSTACK end units={__0} src={FishWeightProbe.Id(__instance)} "
+				+ $"dst={FishWeightProbe.Id(__result)}");
+			FishWeightProbe.Snapshot("instantstack.end");
+		}
+	}
+
+	/// <summary>The copy handed back to the bag when the player takes the fish out again.</summary>
+	[HarmonyPatch]
+	internal static class P140_InstantiateInBag
+	{
+		public static MethodBase TargetMethod()
+		{
+			MethodInfo? target = typeof(PlayerManager).GetMethods()
+				.FirstOrDefault(method => method.Name == nameof(PlayerManager.InstantiateItemInPlayerInventory)
+					&& method.GetParameters().Length == 4
+					&& method.GetParameters()[0].ParameterType == typeof(GearItem));
+
+			return target ?? throw new BadMemeException("P140: InstantiateItemInPlayerInventory(GearItem,...) not found.");
+		}
+
+		public static void Prefix(GearItem __0, int __1)
+		{
+			DebugLog.Write($"[P140] INSTANTBAG begin units={__1} src={FishWeightProbe.Id(__0)}");
+		}
+
+		public static void Postfix(GearItem __result)
+		{
+			DebugLog.Write($"[P140] INSTANTBAG end dst={FishWeightProbe.Id(__result)}");
+			FishWeightProbe.Snapshot("instantbag.end");
+		}
+	}
+
+	[HarmonyPatch(typeof(Inventory), "RemoveGear", [typeof(GameObject), typeof(bool)])]
+	internal static class P140_RemoveGear2
+	{
+		public static void Prefix(GameObject __0, bool __1)
+		{
+			GearItem? gi = __0?.GetComponent<GearItem>();
+			DebugLog.Write($"[P140] REMOVEGEAR(2) begin destroy={__1} item={FishWeightProbe.Id(gi)}");
+		}
+	}
+
+	[HarmonyPatch(typeof(Inventory), "RemoveGear", [typeof(GameObject)])]
+	internal static class P140_RemoveGear1
+	{
+		public static void Prefix(GameObject __0)
+		{
+			GearItem? gi = __0?.GetComponent<GearItem>();
+			DebugLog.Write($"[P140] REMOVEGEAR(1) begin item={FishWeightProbe.Id(gi)}");
+		}
+	}
+
+	[HarmonyPatch(typeof(Inventory), "DestroyGear", [typeof(GearItem)])]
+	internal static class P140_DestroyGear
+	{
+		public static void Prefix(GearItem __0)
+		{
+			DebugLog.Write($"[P140] DESTROYGEAR begin item={FishWeightProbe.Id(__0)}");
+		}
+	}
+
+	[HarmonyPatch(typeof(Inventory), nameof(Inventory.AddGear), [typeof(GearItem), typeof(bool)])]
+	internal static class P140_AddGear
+	{
+		public static void Prefix(GearItem __0)
+		{
+			DebugLog.Write($"[P140] ADDGEAR begin item={FishWeightProbe.Id(__0)}");
+		}
+
+		public static void Postfix(GearItem __0)
+		{
+			FishWeightProbe.Snapshot("addgear.end");
+		}
+	}
+
+	/// <summary>Every managed write to the unit count; a change without this line came from native code.</summary>
+	[HarmonyPatch]
+	internal static class P140_SetUnits
+	{
+		public static MethodBase TargetMethod()
+		{
+			MethodInfo? setter = typeof(StackableItem).GetProperty("m_Units")?.GetSetMethod();
+
+			return setter ?? throw new BadMemeException("P140: StackableItem.m_Units setter not found.");
+		}
+
+		public static void Prefix(StackableItem __instance, int __0)
+		{
+			try
+			{
+				GearItem? gi = __instance.GetComponent<GearItem>();
+				if (gi == null || gi.m_StackableItem == null || __instance.m_Units < 2) return;
+
+				DebugLog.Write($"[P140] SETUNITS sid={__instance.GetInstanceID()} old={__instance.m_Units} new={__0} "
+					+ $"item={FishWeightProbe.Id(gi)}");
+			}
+			catch
+			{
+				// A probe must never change the outcome of the call it watches
+			}
+		}
+	}
+
+	/// <summary>What the player sees, so a display-only fault can be told from a data fault.</summary>
+	[HarmonyPatch(typeof(InventoryGridItem), nameof(InventoryGridItem.Refresh), [typeof(GearItem), typeof(int)])]
+	internal static class P140_GridRefresh
+	{
+		public static void Postfix(InventoryGridItem __instance, GearItem __0)
+		{
+			try
+			{
+				if (__0 == null || __0.m_FoodItem == null || __0.m_StackableItem == null) return;
+				if (__0.m_StackableItem.m_Units < 2) return;
+
+				string stack = __instance.m_StackLabel?.text ?? string.Empty;
+				string unit = __instance.m_UnitLabel?.text ?? string.Empty;
+
+				DebugLog.Write($"[P140] UI stackLabel=\"{stack}\" unitLabel=\"{unit}\" {FishWeightProbe.Id(__0)}");
+			}
+			catch
+			{
+				// A probe must never change the outcome of the call it watches
+			}
+		}
+	}
+}
+#endif
