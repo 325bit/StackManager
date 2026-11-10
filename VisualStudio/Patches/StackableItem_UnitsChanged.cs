@@ -19,6 +19,10 @@ namespace StackManager.Patches
 			if (__instance == null) return;
 			if (StackContentSync.IsLoading) return;
 
+			// A fire briefly shows one unit to the fuel calculation. That is a presentation of the same stack, not
+			// a change to it, so the repair must not scale its contents down to a single unit in the meantime.
+			if (FuelStacking.IsFlattening) return;
+
 			StackContentSync.EnsureSynced(__instance.GetComponent<GearItem>(), "unit count changed");
 		}
 	}

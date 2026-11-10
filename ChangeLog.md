@@ -1,3 +1,36 @@
+# Stack Manager v1.3.12
+
+## Fixed
+
+- **A large fuel stack could not be added to a fire at all.** v1.3.11 stopped the fire from receiving the whole
+  stack and made the consumption remove one unit (log: `AddFuel` added exactly 7200 s, bag went `3 -> 2 -> 1`),
+  but the panel's 12-hour cap check runs *before* `Fire.AddFuel` and measures the burn time of the fuel with the
+  unit count still at its full value - a stack of three fat measured 6.00 h, two units measured 4.00 h, so a stack
+  whose whole burn time plus the fire's remaining time crossed 12 hours was refused outright. The scaling with the
+  unit count is inlined inside `FuelSourceItem.GetModifiedBurnDurationHours` (no call to `get_StackMultiplier` in
+  the disassembly). Inside the feed-fire window the result is now divided by the unit count, so the cap check sees
+  one piece. The window is deliberately narrow: `Container.GetHoursFuel` totals the burn time of everything in a
+  container and there the whole stack is the correct amount, and `Fire.TurnOn` /
+  `Panel_FireStart.RefreshEstimatedDurationLabel` keep the vanilla behaviour as well.
+
+---
+
+# Stack Manager v1.3.11
+
+## Fixed
+
+- **Feeding a stack to a fire burned the entire stack at once.** Selecting a stack this mod created (for example six
+  pieces of animal fat, 6 x 1.0 kg) and pressing "add fuel" handed the whole stack to the fire, which could push the
+  burn time past the 12 hour cap and keep the fire going for days. The feed panel calls `Fire.AddFuel` with the
+  selected gear item *before* it consumes a unit, so the fire sees a stack that still holds every unit, and the
+  consume call writes `StackableItem.m_Units` directly in native code - neither the unit-count setter nor
+  `Inventory.RemoveUnits` sees the change, leaving this mod with no way to keep the stack in step. The unit count is
+  now flattened to one for the duration of `AddFuel`, put straight back afterwards, and exactly one unit is removed
+  together with its contents. Stacks the game or another mod created are untouched, and the last unit still destroys
+  the item as before.
+
+---
+
 # Stack Manager v1.3.10
 
 ## Fixed
